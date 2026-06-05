@@ -19,8 +19,11 @@ from uiprotect.exceptions import ClientError, NotAuthorized
 
 _LOGGER = logging.getLogger(__name__)
 
-# Event types that carry smart detections.
-_SMART_EVENT_TYPES = [EventType.SMART_DETECT, EventType.SMART_DETECT_LINE]
+# Event types that carry smart detections. SMART_DETECT_LINE (line-crossing) is
+# newer; tolerate uiprotect versions that predate it.
+_SMART_EVENT_TYPES = [EventType.SMART_DETECT]
+if (_line := getattr(EventType, "SMART_DETECT_LINE", None)) is not None:
+    _SMART_EVENT_TYPES.append(_line)
 
 
 class ProtectAuthError(Exception):
@@ -106,7 +109,13 @@ class ProtectClient:
         """Return smart-detection events as plain dicts for the API layer."""
         types = None
         if smart_detect_types:
-            types = [SmartDetectObjectType(t) for t in smart_detect_types]
+            parsed = []
+            for t in smart_detect_types:
+                try:
+                    parsed.append(SmartDetectObjectType(t))
+                except ValueError:
+                    _LOGGER.warning("Unknown smart-detect type %r; ignoring", t)
+            types = parsed or None
 
         events = await self._api.get_events(
             start=start,
