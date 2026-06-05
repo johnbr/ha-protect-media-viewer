@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "protect_media_viewer"
 # Keep in sync with manifest.json; used to cache-bust the frontend card.
-VERSION: Final = "0.1.9"
+VERSION: Final = "0.1.10"
 
 # Config entry keys
 CONF_HOST: Final = "host"
@@ -14,6 +14,8 @@ CONF_PORT: Final = "port"
 CONF_USERNAME: Final = "username"
 CONF_PASSWORD: Final = "password"
 CONF_VERIFY_SSL: Final = "verify_ssl"
+# Persisted secret used to sign stable media (thumbnail/clip) tokens.
+CONF_URL_SECRET: Final = "url_secret"
 
 DEFAULT_PORT: Final = 443
 DEFAULT_VERIFY_SSL: Final = False

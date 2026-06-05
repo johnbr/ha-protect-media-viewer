@@ -7,6 +7,7 @@ Phase 2: thumbnail disk cache, HTTP API (/events, /thumb), websocket pre-warmer.
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
@@ -17,7 +18,13 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .api import async_register_views
 from .cache import ClipCache, ThumbnailCache
-from .const import CONF_VERIFY_SSL, DEFAULT_CLIP_CACHE_MB, DOMAIN, VERSION
+from .const import (
+    CONF_URL_SECRET,
+    CONF_VERIFY_SSL,
+    DEFAULT_CLIP_CACHE_MB,
+    DOMAIN,
+    VERSION,
+)
 from .frontend import async_register_frontend
 from .models import RuntimeData
 from .playback import make_clip_producer
@@ -69,7 +76,18 @@ async def async_setup_entry(
     )
     await clips.async_init()
 
-    runtime = RuntimeData(client=client, thumbs=thumbs, clips=clips)
+    # Persisted secret for signing stable media tokens (survives restarts, unlike
+    # HA's per-process signed-path secret). Generate once and store on the entry.
+    url_secret = entry.data.get(CONF_URL_SECRET)
+    if not url_secret:
+        url_secret = secrets.token_hex(32)
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_URL_SECRET: url_secret}
+        )
+
+    runtime = RuntimeData(
+        client=client, thumbs=thumbs, clips=clips, url_secret=url_secret
+    )
     entry.runtime_data = runtime
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 

@@ -1,25 +1,31 @@
 """HTTP API for the dashboard card.
 
-Two endpoints:
-  GET /api/protect_media_viewer/events    -> paginated, filtered detection list
+Endpoints:
+  GET /api/protect_media_viewer/events     -> paginated, filtered detection list
+  GET /api/protect_media_viewer/cameras    -> camera list
   GET /api/protect_media_viewer/thumb/{id} -> cached JPEG thumbnail
+  GET /api/protect_media_viewer/clip/{id}  -> cached MP4 clip
 
-The events response embeds a *signed* thumbnail URL per event so the card can
-drop it straight into an <img> tag (browsers can't attach auth headers to
-images; HA's signed-path auth handles it instead).
+events/cameras require normal HA auth (the card fetches them via callApi). The
+media endpoints (thumb/clip) are loaded by the browser in <img>/<video> tags,
+which can't send auth headers. Rather than HA signed paths (whose secret is
+regenerated on every restart, invalidating cached URLs), we guard them with our
+own HMAC token derived from a secret persisted in the config entry. The token is
+deterministic, so URLs are stable -> the browser caches images -> and they keep
+working across restarts.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, SMART_DETECT_TYPES
@@ -28,14 +34,30 @@ from .models import RuntimeData
 _LOGGER = logging.getLogger(__name__)
 
 _API_BASE = f"/api/{DOMAIN}"
-# Long TTL + server-side reuse keeps signed URLs stable so the browser caches
-# the images. Regenerate once a URL is within the renew window of expiring.
-_URL_SIGN_TTL = timedelta(days=30)
-_URL_RENEW_BEFORE = 2 * 24 * 3600  # seconds: regenerate when <2 days remain
-_SIGNED_CACHE_MAX = 20000  # bound the per-NVR signed-URL cache
 _MAX_LIMIT = 200
 _DEFAULT_LIMIT = 60
 _DEFAULT_HOURS = 24
+
+
+def _make_token(secret: str, kind: str, event_id: str) -> str:
+    """Deterministic, stable HMAC token guarding a media URL."""
+    return hmac.new(
+        secret.encode(), f"{kind}:{event_id}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def _check_token(secret: str, kind: str, event_id: str, token: str | None) -> bool:
+    if not token:
+        return False
+    return hmac.compare_digest(_make_token(secret, kind, event_id), token)
+
+
+def _media_url(kind: str, event_id: str, secret: str, entry_id: str | None) -> str:
+    token = _make_token(secret, kind, event_id)
+    query = f"t={token}"
+    if entry_id:
+        query += f"&entry={entry_id}"
+    return f"{_API_BASE}/{kind}/{event_id}?{query}"
 
 
 def _get_runtime(hass: HomeAssistant, entry_id: str | None) -> RuntimeData | None:
@@ -48,29 +70,6 @@ def _get_runtime(hass: HomeAssistant, entry_id: str | None) -> RuntimeData | Non
     if len(store) == 1:
         return next(iter(store.values()))
     return None  # ambiguous: caller must pass ?entry=
-
-
-def _stable_signed(
-    hass: HomeAssistant, runtime: RuntimeData, path: str
-) -> str:
-    """Return a signed URL for ``path``, reusing a cached one while still valid.
-
-    Stable URLs let the browser cache the images instead of re-fetching on
-    every scroll/revisit (async_sign_path embeds a fresh timestamp each call).
-    """
-    now = int(time.time())
-    cached = runtime.signed_urls.get(path)
-    if cached is not None and cached[1] - now > _URL_RENEW_BEFORE:
-        return cached[0]
-
-    if len(runtime.signed_urls) >= _SIGNED_CACHE_MAX:
-        runtime.signed_urls.clear()
-
-    # Bind to HA's content user (not the requesting session) so the URL stays
-    # valid across logins/token changes — these are long-lived cacheable media.
-    url = async_sign_path(hass, path, _URL_SIGN_TTL, use_content_user=True)
-    runtime.signed_urls[path] = (url, now + int(_URL_SIGN_TTL.total_seconds()))
-    return url
 
 
 def _int_param(request: web.Request, key: str, default: int, maximum: int) -> int:
@@ -134,12 +133,10 @@ class EventsView(HomeAssistantView):
         raw_count = len(page)
         events = [e for e in page if e["camera_id"] == camera] if camera else page
 
-        entry_suffix = f"?entry={entry_id}" if entry_id else ""
+        secret = runtime.url_secret
         for ev in events:
-            thumb = f"{_API_BASE}/thumb/{ev['id']}{entry_suffix}"
-            clip = f"{_API_BASE}/clip/{ev['id']}{entry_suffix}"
-            ev["thumbnail"] = _stable_signed(hass, runtime, thumb)
-            ev["clip"] = _stable_signed(hass, runtime, clip)
+            ev["thumbnail"] = _media_url("thumb", ev["id"], secret, entry_id)
+            ev["clip"] = _media_url("clip", ev["id"], secret, entry_id)
 
         return self.json(
             {
@@ -155,17 +152,19 @@ class EventsView(HomeAssistantView):
 
 
 class ThumbnailView(HomeAssistantView):
-    """Serve a cached JPEG thumbnail for one event."""
+    """Serve a cached JPEG thumbnail for one event (guarded by a media token)."""
 
     url = f"{_API_BASE}/thumb/{{event_id}}"
     name = f"api:{DOMAIN}:thumb"
-    requires_auth = True
+    requires_auth = False  # guarded by our own HMAC token, not HA auth
 
     async def get(self, request: web.Request, event_id: str) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
         runtime = _get_runtime(hass, request.query.get("entry"))
         if runtime is None:
-            return web.Response(status=400)
+            return web.Response(status=404)
+        if not _check_token(runtime.url_secret, "thumb", event_id, request.query.get("t")):
+            return web.Response(status=404)
 
         data = await runtime.thumbs.async_get(event_id)
         if not data:
@@ -200,13 +199,15 @@ class ClipView(HomeAssistantView):
 
     url = f"{_API_BASE}/clip/{{event_id}}"
     name = f"api:{DOMAIN}:clip"
-    requires_auth = True
+    requires_auth = False  # guarded by our own HMAC token, not HA auth
 
     async def get(self, request: web.Request, event_id: str) -> web.StreamResponse:
         hass: HomeAssistant = request.app["hass"]
         runtime = _get_runtime(hass, request.query.get("entry"))
         if runtime is None:
-            return web.Response(status=400)
+            return web.Response(status=404)
+        if not _check_token(runtime.url_secret, "clip", event_id, request.query.get("t")):
+            return web.Response(status=404)
 
         path = await runtime.clips.async_get_path(event_id)
         if path is None:

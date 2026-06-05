@@ -15,8 +15,8 @@ class RuntimeData:
     client: ProtectClient
     thumbs: ThumbnailCache
     clips: ClipCache
+    # Persisted secret (from the config entry) used to sign stable media tokens.
+    # Unlike HA's signed paths, this survives restarts, so thumbnail/clip URLs
+    # stay valid and browser-cacheable across restarts.
+    url_secret: str = ""
     ws_unsub: object | None = None
-    # Cache of stable signed URLs keyed by path: {path: (signed_url, exp_ts)}.
-    # Reusing them keeps thumbnail URLs identical across /events calls so the
-    # browser can cache the images instead of re-downloading on every scroll.
-    signed_urls: dict[str, tuple[str, int]] = field(default_factory=dict)
