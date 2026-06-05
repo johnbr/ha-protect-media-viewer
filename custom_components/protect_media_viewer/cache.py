@@ -70,6 +70,15 @@ class ThumbnailCache:
             data = await self._fetch(event_id, THUMB_WIDTH)
             if not data:
                 return None
+            if not _is_valid_jpeg(data):
+                # Never cache a partial/garbage response — it would be served
+                # forever (immutable). Return it so the client can retry later.
+                _LOGGER.warning(
+                    "Discarding invalid thumbnail for %s (%d bytes); not caching",
+                    event_id,
+                    len(data),
+                )
+                return None
             await self._hass.async_add_executor_job(_write_atomic, path, data)
             return data
         # Note: we intentionally leak the per-id lock; ids are bounded by what is
@@ -144,6 +153,11 @@ class ClipCache:
         await self._hass.async_add_executor_job(
             _prune_dir, self._dir, self._max_bytes, "*.mp4"
         )
+
+
+def _is_valid_jpeg(data: bytes) -> bool:
+    """Cheap sanity check: starts with the JPEG SOI marker and isn't tiny."""
+    return len(data) >= 1000 and data[:2] == b"\xff\xd8"
 
 
 def _read_if_exists(path: Path) -> bytes | None:

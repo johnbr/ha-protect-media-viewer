@@ -421,6 +421,11 @@ class ProtectMediaViewerCard extends HTMLElement {
     const attempt = Number(img.dataset.attempt || "0") + 1;
     if (attempt > THUMB_MAX_RETRIES) {
       tile.classList.add("failed"); // give up: show a broken-image marker
+      tile.title = `No thumbnail: event ${ev.id} (${(ev.smart_detect_types || []).join(", ")})`;
+      console.warn(
+        `protect-media-viewer: thumbnail gave up for event ${ev.id}`,
+        { camera: ev.camera_name, types: ev.smart_detect_types, start: ev.start, url: ev.thumbnail }
+      );
       return;
     }
     img.dataset.attempt = String(attempt);
