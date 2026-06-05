@@ -21,7 +21,7 @@ Click a thumbnail and the clip plays inline on the dashboard.
 - [x] **Phase 2** — disk cache + HTTP API (`/events`, `/thumb`) + websocket pre-warmer
 - [x] **Phase 3** — inline clip playback (`/clip`, range-enabled, LRU-capped)
 - [x] **Phase 4** — dashboard card (filter chips, infinite scroll, inline player)
-- [ ] Phase 5 — HACS polish (validation workflows, releases)
+- [x] **Phase 5** — HACS polish (hassfest + HACS + card CI, MIT license, v0.1.0 release)
 
 ### HTTP API (Phase 2)
 
@@ -79,3 +79,13 @@ npm test
 
 The card ships as plain JS (no build step) — the file under
 `custom_components/protect_media_viewer/frontend/` is the artifact.
+
+### Deploy into a running Home Assistant (for testing)
+
+```bash
+scripts/deploy.sh /path/to/homeassistant/config          # symlink
+scripts/deploy.sh /path/to/homeassistant/config --copy   # or copy
+```
+
+Then restart HA and add the integration via **Settings → Devices & Services →
+Add Integration → Protect Media Viewer**.
