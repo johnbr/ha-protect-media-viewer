@@ -12,6 +12,7 @@ images; HA's signed-path auth handles it instead).
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -27,8 +28,11 @@ from .models import RuntimeData
 _LOGGER = logging.getLogger(__name__)
 
 _API_BASE = f"/api/{DOMAIN}"
-_THUMB_URL_SIGN_TTL = timedelta(hours=12)
-_CLIP_URL_SIGN_TTL = timedelta(hours=12)
+# Long TTL + server-side reuse keeps signed URLs stable so the browser caches
+# the images. Regenerate once a URL is within the renew window of expiring.
+_URL_SIGN_TTL = timedelta(days=30)
+_URL_RENEW_BEFORE = 2 * 24 * 3600  # seconds: regenerate when <2 days remain
+_SIGNED_CACHE_MAX = 20000  # bound the per-NVR signed-URL cache
 _MAX_LIMIT = 200
 _DEFAULT_LIMIT = 60
 _DEFAULT_HOURS = 24
@@ -44,6 +48,29 @@ def _get_runtime(hass: HomeAssistant, entry_id: str | None) -> RuntimeData | Non
     if len(store) == 1:
         return next(iter(store.values()))
     return None  # ambiguous: caller must pass ?entry=
+
+
+def _stable_signed(
+    hass: HomeAssistant, runtime: RuntimeData, path: str
+) -> str:
+    """Return a signed URL for ``path``, reusing a cached one while still valid.
+
+    Stable URLs let the browser cache the images instead of re-fetching on
+    every scroll/revisit (async_sign_path embeds a fresh timestamp each call).
+    """
+    now = int(time.time())
+    cached = runtime.signed_urls.get(path)
+    if cached is not None and cached[1] - now > _URL_RENEW_BEFORE:
+        return cached[0]
+
+    if len(runtime.signed_urls) >= _SIGNED_CACHE_MAX:
+        runtime.signed_urls.clear()
+
+    # Bind to HA's content user (not the requesting session) so the URL stays
+    # valid across logins/token changes — these are long-lived cacheable media.
+    url = async_sign_path(hass, path, _URL_SIGN_TTL, use_content_user=True)
+    runtime.signed_urls[path] = (url, now + int(_URL_SIGN_TTL.total_seconds()))
+    return url
 
 
 def _int_param(request: web.Request, key: str, default: int, maximum: int) -> int:
@@ -111,8 +138,8 @@ class EventsView(HomeAssistantView):
         for ev in events:
             thumb = f"{_API_BASE}/thumb/{ev['id']}{entry_suffix}"
             clip = f"{_API_BASE}/clip/{ev['id']}{entry_suffix}"
-            ev["thumbnail"] = async_sign_path(hass, thumb, _THUMB_URL_SIGN_TTL)
-            ev["clip"] = async_sign_path(hass, clip, _CLIP_URL_SIGN_TTL)
+            ev["thumbnail"] = _stable_signed(hass, runtime, thumb)
+            ev["clip"] = _stable_signed(hass, runtime, clip)
 
         return self.json(
             {
