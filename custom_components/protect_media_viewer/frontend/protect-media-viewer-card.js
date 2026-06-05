@@ -23,6 +23,9 @@ const TIME_RANGES = [
 
 const ICON_BY_TYPE = Object.fromEntries(TYPES.map((t) => [t.key, t.icon]));
 
+// How many times to retry a thumbnail that fails to load before marking it broken.
+const THUMB_MAX_RETRIES = 5;
+
 class ProtectMediaViewerCard extends HTMLElement {
   constructor() {
     super();
@@ -205,6 +208,13 @@ class ProtectMediaViewerCard extends HTMLElement {
           transition: transform 0.15s ease;
         }
         .tile:hover img { transform: scale(1.04); }
+        .tile.failed::after {
+          content: ""; position: absolute; inset: 0;
+          background:
+            var(--secondary-background-color)
+            url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="gray" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m3 16 5-5 4 4"/><path d="m14 13 2-2 5 5"/><line x1="3" y1="3" x2="21" y2="21"/></svg>')
+            center / 36px no-repeat;
+        }
         .tile .overlay {
           position: absolute; left: 0; right: 0; bottom: 0;
           padding: 14px 6px 4px;
@@ -345,8 +355,14 @@ class ProtectMediaViewerCard extends HTMLElement {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.decoding = "async";
-    img.src = ev.thumbnail;
     img.alt = (ev.smart_detect_types || []).join(", ");
+    img.dataset.attempt = "0";
+    // Self-heal: a thumbnail can briefly 404 (e.g. the NVR hasn't finished
+    // generating it). Retry with backoff before giving up, and cache-bust each
+    // retry so the browser doesn't reuse the failed response.
+    img.addEventListener("error", () => this._onThumbError(tile, img, ev));
+    img.addEventListener("load", () => tile.classList.remove("failed"));
+    img.src = ev.thumbnail;
 
     const overlay = document.createElement("div");
     overlay.className = "overlay";
@@ -364,6 +380,21 @@ class ProtectMediaViewerCard extends HTMLElement {
     tile.appendChild(overlay);
     tile.addEventListener("click", () => this._openPlayer(ev));
     this._grid.appendChild(tile);
+  }
+
+  _onThumbError(tile, img, ev) {
+    const attempt = Number(img.dataset.attempt || "0") + 1;
+    if (attempt > THUMB_MAX_RETRIES) {
+      tile.classList.add("failed"); // give up: show a broken-image marker
+      return;
+    }
+    img.dataset.attempt = String(attempt);
+    const delay = Math.min(8000, 500 * 2 ** attempt);
+    setTimeout(() => {
+      // Cache-bust so the browser re-requests instead of reusing the failure.
+      const sep = ev.thumbnail.includes("?") ? "&" : "?";
+      img.src = `${ev.thumbnail}${sep}_a=${attempt}`;
+    }, delay);
   }
 
   _openPlayer(ev) {
