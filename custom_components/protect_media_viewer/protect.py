@@ -7,6 +7,7 @@ top of this in later phases.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import ssl
 from dataclasses import dataclass
@@ -169,7 +170,30 @@ class ProtectClient:
         return result
 
     async def get_thumbnail(self, event_id: str, width: int | None = None) -> bytes | None:
-        return await self._api.get_event_thumbnail(event_id, width=width)
+        """Fetch an event thumbnail (JPEG bytes), or None if unavailable.
+
+        We hit the ``events/{id}/thumbnail`` endpoint directly instead of using
+        ``get_event_thumbnail``: in uiprotect 10.5.0 (pinned by HA's official
+        UniFi Protect integration) that method does ``thumbnail_id.replace("e-",
+        "")``, which strips *every* "e-" substring — corrupting any event id that
+        contains "e-" (~a quarter of UUIDs) and yielding a 404. A short retry
+        covers thumbnails that aren't generated the instant an event ends.
+        """
+        params: dict[str, Any] = {"w": width} if width else {}
+        for attempt in range(2):
+            try:
+                data = await self._api.api_request_raw(
+                    f"events/{event_id}/thumbnail",
+                    params=params,
+                    raise_exception=False,
+                )
+            except Exception:  # noqa: BLE001 - treat any failure as "no thumb yet"
+                data = None
+            if data:
+                return data
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+        return None
 
     async def get_event_window(
         self, event_id: str
