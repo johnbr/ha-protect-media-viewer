@@ -176,6 +176,8 @@ class ProtectMediaViewerCard extends HTMLElement {
 
   _render() {
     const minCol = this._config.columns || 180;
+    // Bounded height for the scrolling grid area; accepts any CSS length.
+    const scrollHeight = this._config.height || "70vh";
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
@@ -205,6 +207,13 @@ class ProtectMediaViewerCard extends HTMLElement {
           border: 1px solid var(--divider-color);
         }
         .spacer { flex: 1; }
+        /* The header + toolbar stay put; only this area scrolls. */
+        .scroll {
+          max-height: ${scrollHeight};
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding-right: 2px;
+        }
         .grid {
           display: grid; gap: 8px;
           grid-template-columns: repeat(auto-fill, minmax(${minCol}px, 1fr));
@@ -261,9 +270,11 @@ class ProtectMediaViewerCard extends HTMLElement {
           <select class="camera"><option value="">All cameras</option></select>
           <select class="time"></select>
         </div>
-        <div class="grid"></div>
-        <div class="status"></div>
-        <div class="sentinel"></div>
+        <div class="scroll">
+          <div class="grid"></div>
+          <div class="status"></div>
+          <div class="sentinel"></div>
+        </div>
       </ha-card>
       <div class="modal">
         <div class="box">
@@ -275,6 +286,7 @@ class ProtectMediaViewerCard extends HTMLElement {
     `;
 
     this._grid = this.shadowRoot.querySelector(".grid");
+    this._scrollEl = this.shadowRoot.querySelector(".scroll");
     this._statusEl = this.shadowRoot.querySelector(".status");
     this._cameraSel = this.shadowRoot.querySelector("select.camera");
     this._timeSel = this.shadowRoot.querySelector("select.time");
@@ -316,6 +328,7 @@ class ProtectMediaViewerCard extends HTMLElement {
     //  - an auto-fill after each page so the first screenful always fills.
     this._sentinel = this.shadowRoot.querySelector(".sentinel");
     this._io = new IntersectionObserver(() => this._maybeLoadMore(), {
+      root: this._scrollEl,
       rootMargin: "800px",
     });
     this._io.observe(this._sentinel);
@@ -336,10 +349,13 @@ class ProtectMediaViewerCard extends HTMLElement {
 
   _maybeLoadMore() {
     if (this._loading || !this._hasMore || !this._sentinel) return;
-    const rect = this._sentinel.getBoundingClientRect();
-    const vh = window.innerHeight || document.documentElement.clientHeight;
-    // Load the next page once the sentinel is within ~800px of the viewport.
-    if (rect.top <= vh + 800) this._loadMore();
+    const sentinelTop = this._sentinel.getBoundingClientRect().top;
+    // Measure against the inner scroll container's bottom (the grid scrolls
+    // there, not the window), falling back to the viewport.
+    const bottom = this._scrollEl
+      ? this._scrollEl.getBoundingClientRect().bottom
+      : window.innerHeight || document.documentElement.clientHeight;
+    if (sentinelTop <= bottom + 800) this._loadMore();
   }
 
   _renderChips() {

@@ -55,6 +55,8 @@ default_hours: 24            # optional: 1 / 24 / 168 / 720
 default_types: [person, vehicle]   # optional: pre-selected filter chips
 columns: 180                 # optional: min thumbnail width (px)
 page_size: 60                # optional: events fetched per scroll page
+height: 70vh                 # optional: height of the scrolling grid area
+                             #   (any CSS length; header/filters stay pinned)
 # entry: <config_entry_id>   # optional: only needed with multiple NVRs
 ```
 
