@@ -17,7 +17,8 @@ from typing import Any
 
 from aiohttp import web
 
-from homeassistant.components.http import HomeAssistantView, async_sign_path
+from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, SMART_DETECT_TYPES

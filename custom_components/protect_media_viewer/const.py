@@ -6,7 +6,7 @@ from typing import Final
 
 DOMAIN: Final = "protect_media_viewer"
 # Keep in sync with manifest.json; used to cache-bust the frontend card.
-VERSION: Final = "0.1.1"
+VERSION: Final = "0.1.2"
 
 # Config entry keys
 CONF_HOST: Final = "host"
