@@ -426,9 +426,14 @@ class ProtectMediaViewerCard extends HTMLElement {
     img.dataset.attempt = String(attempt);
     const delay = Math.min(8000, 500 * 2 ** attempt);
     setTimeout(() => {
-      // Cache-bust so the browser re-requests instead of reusing the failure.
-      const sep = ev.thumbnail.includes("?") ? "&" : "?";
-      img.src = `${ev.thumbnail}${sep}_a=${attempt}`;
+      if (!img.isConnected) return;
+      // Re-request the SAME signed URL. We must NOT add query params: HA signs
+      // every param except width/height, so a cache-buster would invalidate the
+      // signature (401 -> log spam + IP-ban risk). A failed fetch isn't cached,
+      // so toggling src re-fetches; a not-ready thumbnail simply 404s until it
+      // exists, then loads.
+      img.removeAttribute("src");
+      img.src = ev.thumbnail;
     }, delay);
   }
 

@@ -9,5 +9,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/johnbr/ha-protect-media-viewer/issues",
   "requirements": ["uiprotect>=6.0.0"],
-  "version": "0.1.6"
+  "version": "0.1.7"
 }
