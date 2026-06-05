@@ -67,6 +67,10 @@ class ProtectMediaViewerCard extends HTMLElement {
 
   disconnectedCallback() {
     if (this._io) this._io.disconnect();
+    if (this._onScroll) {
+      window.removeEventListener("scroll", this._onScroll, true);
+      window.removeEventListener("resize", this._onScroll, true);
+    }
   }
 
   getCardSize() {
@@ -145,13 +149,19 @@ class ProtectMediaViewerCard extends HTMLElement {
       } else if (!this._hasMore) {
         this._setStatus(`${this._events.length} detections`);
       } else {
-        this._setStatus("");
+        // More available — show a running count and keep paging if needed.
+        this._setStatus(`${this._events.length} detections — scroll for more…`);
         // If a camera filter dropped the whole page, keep paging automatically.
         if (!events.length) {
           this._loading = false;
           this._loadMore();
           return;
         }
+        // Auto-fill: if the page didn't push the sentinel past the viewport,
+        // load the next one (also covers the "observer never fires" case).
+        this._loading = false;
+        requestAnimationFrame(() => this._maybeLoadMore());
+        return;
       }
     } catch (err) {
       console.error("protect-media-viewer: events query failed", err);
@@ -297,14 +307,39 @@ class ProtectMediaViewerCard extends HTMLElement {
       if (e.key === "Escape") close();
     });
 
-    // Infinite scroll.
-    this._io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((en) => en.isIntersecting)) this._loadMore();
-      },
-      { rootMargin: "600px" }
-    );
-    this._io.observe(this.shadowRoot.querySelector(".sentinel"));
+    // Infinite scroll. We use several triggers because an IntersectionObserver
+    // alone is unreliable inside Home Assistant's nested scroll containers:
+    //  - the observer (works when it fires),
+    //  - a capturing scroll listener on window (catches scrolling in any
+    //    ancestor scroll container, since scroll events don't bubble),
+    //  - a resize listener,
+    //  - an auto-fill after each page so the first screenful always fills.
+    this._sentinel = this.shadowRoot.querySelector(".sentinel");
+    this._io = new IntersectionObserver(() => this._maybeLoadMore(), {
+      rootMargin: "800px",
+    });
+    this._io.observe(this._sentinel);
+
+    // Throttle to one check per frame (scroll fires very frequently; the check
+    // calls getBoundingClientRect which forces layout).
+    this._onScroll = () => {
+      if (this._scrollScheduled) return;
+      this._scrollScheduled = true;
+      requestAnimationFrame(() => {
+        this._scrollScheduled = false;
+        this._maybeLoadMore();
+      });
+    };
+    window.addEventListener("scroll", this._onScroll, true);
+    window.addEventListener("resize", this._onScroll, true);
+  }
+
+  _maybeLoadMore() {
+    if (this._loading || !this._hasMore || !this._sentinel) return;
+    const rect = this._sentinel.getBoundingClientRect();
+    const vh = window.innerHeight || document.documentElement.clientHeight;
+    // Load the next page once the sentinel is within ~800px of the viewport.
+    if (rect.top <= vh + 800) this._loadMore();
   }
 
   _renderChips() {

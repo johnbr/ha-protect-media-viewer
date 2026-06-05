@@ -23,6 +23,13 @@ global.IntersectionObserver = class {
   unobserve() {}
   disconnect() {}
 };
+// In a browser these are globals; map jsdom's so the card behaves the same here.
+global.requestAnimationFrame = window.requestAnimationFrame
+  ? window.requestAnimationFrame.bind(window)
+  : (cb) => setTimeout(() => cb(Date.now()), 16);
+global.cancelAnimationFrame = window.cancelAnimationFrame
+  ? window.cancelAnimationFrame.bind(window)
+  : (id) => clearTimeout(id);
 
 // jsdom doesn't implement media playback; stub it so the test output is clean.
 window.HTMLMediaElement.prototype.play = function () { return Promise.resolve(); };
@@ -117,6 +124,33 @@ async function main() {
   el.shadowRoot.querySelector(".modal .close").click();
   assert.ok(!modal.classList.contains("open"), "modal closed");
   assert.strictEqual(video.getAttribute("src"), null, "video src cleared on close");
+
+  // --- Pagination scenario: 3 pages (60/60/30) must all load. ---
+  // jsdom getBoundingClientRect() returns 0, so the auto-fill path pages through.
+  const pagedHass = {
+    async callApi(method, path) {
+      if (path.startsWith("protect_media_viewer/cameras")) return { cameras: [] };
+      const url = new URL("http://x/" + path);
+      const offset = Number(url.searchParams.get("offset") || "0");
+      const limit = Number(url.searchParams.get("limit") || "60");
+      const TOTAL = 150;
+      const events = [];
+      for (let i = offset; i < Math.min(offset + limit, TOTAL); i++) {
+        events.push(makeEvent("p" + i, ["vehicle"], "roof"));
+      }
+      return { events, count: events.length, offset, limit, has_more: offset + limit < TOTAL };
+    },
+  };
+  const el2 = document.createElement("protect-media-viewer-card");
+  el2.setConfig({ title: "Paged" });
+  document.body.appendChild(el2);
+  el2.hass = pagedHass;
+
+  const grid2 = el2.shadowRoot.querySelector(".grid");
+  const deadline = Date.now() + 2000;
+  while (grid2.children.length < 150 && Date.now() < deadline) await tick();
+  assert.strictEqual(grid2.children.length, 150, `paged to all 150 tiles (got ${grid2.children.length})`);
+  assert.match(el2.shadowRoot.querySelector(".status").textContent, /150 detections/, "shows final count");
 
   console.log("Phase 4 card smoke test: SUCCESS (all assertions passed)");
 }
