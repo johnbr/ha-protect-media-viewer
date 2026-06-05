@@ -8,16 +8,40 @@ top of this in later phases.
 from __future__ import annotations
 
 import logging
+import ssl
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+import aiohttp
 
 from uiprotect import ProtectApiClient
 from uiprotect.data import EventType, SmartDetectObjectType
 from uiprotect.exceptions import ClientError, NotAuthorized
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def async_create_session(hass: Any, verify_ssl: bool) -> aiohttp.ClientSession:
+    """Build a private aiohttp session for talking to the NVR.
+
+    We own this session (not one of HA's shared/managed sessions) so we can
+    close it on unload without tripping HA's "closes the Home Assistant aiohttp
+    session" warning. The cookie jar must be ``unsafe`` so auth cookies are
+    stored for IP-address hosts. The SSL context is built off-loop to avoid a
+    blocking-call warning.
+    """
+    if verify_ssl:
+        ssl_context: ssl.SSLContext | bool = await hass.async_add_executor_job(
+            ssl.create_default_context
+        )
+    else:
+        ssl_context = False
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    return aiohttp.ClientSession(
+        connector=connector, cookie_jar=aiohttp.CookieJar(unsafe=True)
+    )
 
 # Event types that carry smart detections. SMART_DETECT_LINE (line-crossing) is
 # newer; tolerate uiprotect versions that predate it.

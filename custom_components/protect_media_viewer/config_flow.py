@@ -9,7 +9,6 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .const import (
     CONF_VERIFY_SSL,
@@ -17,7 +16,12 @@ from .const import (
     DEFAULT_VERIFY_SSL,
     DOMAIN,
 )
-from .protect import ProtectAuthError, ProtectClient, ProtectConnectionError
+from .protect import (
+    ProtectAuthError,
+    ProtectClient,
+    ProtectConnectionError,
+    async_create_session,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,8 +37,8 @@ class ProtectMediaViewerConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            session = async_create_clientsession(
-                self.hass, verify_ssl=user_input[CONF_VERIFY_SSL]
+            session = await async_create_session(
+                self.hass, user_input[CONF_VERIFY_SSL]
             )
             client = ProtectClient(
                 host=user_input[CONF_HOST],
