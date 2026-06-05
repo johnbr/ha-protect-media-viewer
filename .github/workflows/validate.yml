@@ -22,9 +22,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # 'brands' requires submitting assets to the home-assistant/brands
-          # repo; not required to install from a custom repository.
-          ignore: brands
 
   card:
     name: Card smoke test
