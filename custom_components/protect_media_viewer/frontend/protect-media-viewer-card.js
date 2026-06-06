@@ -504,14 +504,20 @@ class ProtectMediaViewerCard extends HTMLElement {
   }
 }
 
-customElements.define("protect-media-viewer-card", ProtectMediaViewerCard);
+// Define defensively: if this module is ever evaluated twice (e.g. it's both
+// auto-registered by the integration and added as a manual Lovelace resource),
+// a second customElements.define() would throw and abort the module, which can
+// leave the card "undefined" and surface as a Configuration error.
+if (!customElements.get("protect-media-viewer-card")) {
+  customElements.define("protect-media-viewer-card", ProtectMediaViewerCard);
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "protect-media-viewer-card",
-  name: "Protect Media Viewer",
-  description: "Browse UniFi Protect smart-detection events with fast thumbnails and inline playback.",
-  preview: false,
-});
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: "protect-media-viewer-card",
+    name: "Protect Media Viewer",
+    description: "Browse UniFi Protect smart-detection events with fast thumbnails and inline playback.",
+    preview: false,
+  });
 
-console.info("%c PROTECT-MEDIA-VIEWER-CARD ", "color: #fff; background: #03a9f4; font-weight: 700;");
+  console.info("%c PROTECT-MEDIA-VIEWER-CARD ", "color: #fff; background: #03a9f4; font-weight: 700;");
+}
