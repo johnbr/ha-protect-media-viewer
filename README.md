@@ -85,8 +85,8 @@ and `UNIFI_PASSWORD` environment variables:
 python3 -m venv .venv && . .venv/bin/activate
 pip install uiprotect
 python scripts/connectivity_test.py   # auth + smart-detection query
-python scripts/phase2_test.py         # thumbnail cache + type filtering
-python scripts/phase3_test.py         # clip export + cache
+python scripts/cache_test.py          # thumbnail cache + type filtering
+python scripts/clip_test.py           # clip export + cache
 ```
 
 Import-check the integration against a real Home Assistant install (catches

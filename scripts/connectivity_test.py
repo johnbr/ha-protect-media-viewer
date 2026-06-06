@@ -1,4 +1,4 @@
-"""Phase 1 connectivity test: prove a live smart-detection query + thumbnail fetch.
+"""Connectivity test: prove a live smart-detection query + thumbnail fetch.
 
 Run: . .venv/bin/activate && python scripts/connectivity_test.py
 Reads UNIFI_HOST / UNIFI_USERNAME / UNIFI_PASSWORD from the environment.
@@ -89,7 +89,7 @@ async def main() -> None:
             else:
                 print("  no thumbnail available yet (event may be in-progress)")
 
-        print("\nPhase 1 connectivity: SUCCESS")
+        print("\nConnectivity: SUCCESS")
     finally:
         await client.close_session()
         await session.close()

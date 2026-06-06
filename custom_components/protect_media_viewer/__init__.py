@@ -1,7 +1,7 @@
 """The Protect Media Viewer integration.
 
-Phase 1: authenticated connection.
-Phase 2: thumbnail disk cache, HTTP API (/events, /thumb), websocket pre-warmer.
+Sets up the authenticated NVR connection, the thumbnail/clip disk caches, the
+HTTP API, the websocket pre-warmer, and the bundled dashboard card.
 """
 
 from __future__ import annotations

@@ -1,8 +1,7 @@
 """Thin async wrapper around the uiprotect client.
 
 Centralises connection + the handful of calls the viewer needs so config-flow
-validation and runtime share one code path. Caching and HTTP serving build on
-top of this in later phases.
+validation and runtime share one code path.
 """
 
 from __future__ import annotations

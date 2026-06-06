@@ -1,7 +1,7 @@
-"""Phase 3 test: ClipCache + clip export against the live NVR.
+"""Clip test: ClipCache + clip export against the live NVR.
 
 Exports a real MP4 for a recent finished detection, validates it, and times the
-cache miss (export) vs hit (disk). Uses the same fake-hass shim as phase 2.
+cache miss (export) vs hit (disk). Uses the same fake-hass shim as cache_test.
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ async def main() -> None:
         print(f"Cache hit: {warm*1000:.1f} ms (served from disk, range-enabled)")
         assert path2 == path
 
-        print("\nPhase 3 clip export + cache: SUCCESS")
+        print("\nClip export + cache: SUCCESS")
     finally:
         await client.close()
         await session.close()

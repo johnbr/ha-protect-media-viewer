@@ -1,4 +1,4 @@
-"""Phase 2 test: exercise ThumbnailCache + filtered queries against the live NVR.
+"""Cache test: exercise ThumbnailCache + filtered queries against the live NVR.
 
 Validates cache.py and protect.py without a running Home Assistant by supplying a
 minimal fake `hass`. Demonstrates the cache-miss vs cache-hit speedup that fixes
@@ -120,7 +120,7 @@ async def main() -> None:
         total = sum(f.stat().st_size for f in files)
         print(f"\nOn disk: {len(files)} files, {total/1024:.0f} KB "
               f"({total/max(len(files),1)/1024:.0f} KB avg)")
-        print("\nPhase 2 cache + filter: SUCCESS")
+        print("\nCache + filter: SUCCESS")
     finally:
         await client.close()
         await session.close()

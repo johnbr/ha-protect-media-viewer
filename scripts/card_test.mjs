@@ -152,7 +152,7 @@ async function main() {
   assert.strictEqual(grid2.children.length, 150, `paged to all 150 tiles (got ${grid2.children.length})`);
   assert.match(el2.shadowRoot.querySelector(".status").textContent, /150 detections/, "shows final count");
 
-  console.log("Phase 4 card smoke test: SUCCESS (all assertions passed)");
+  console.log("Card smoke test: SUCCESS (all assertions passed)");
 }
 
 main().catch((err) => {
