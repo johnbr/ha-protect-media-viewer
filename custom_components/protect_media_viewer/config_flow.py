@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 
@@ -54,7 +53,7 @@ class ProtectMediaViewerConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_auth"
             except ProtectConnectionError:
                 errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001 - surface as generic to the user
+            except Exception:
                 _LOGGER.exception("Unexpected error connecting to UniFi Protect")
                 errors["base"] = "unknown"
             else:

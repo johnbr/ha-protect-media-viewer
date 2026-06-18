@@ -8,11 +8,10 @@ top of the grid, so the first view is instant too.
 from __future__ import annotations
 
 import logging
-from typing import Callable
-
-from uiprotect.data import Event, WSSubscriptionMessage
+from collections.abc import Callable
 
 from homeassistant.core import HomeAssistant, callback
+from uiprotect.data import Event, WSSubscriptionMessage
 
 from .const import SMART_DETECT_TYPES
 from .models import RuntimeData
@@ -48,5 +47,5 @@ async def _warm(runtime: RuntimeData, event_id: str) -> None:
     try:
         if await runtime.thumbs.async_warm(event_id):
             _LOGGER.debug("Pre-warmed thumbnail for %s", event_id)
-    except Exception:  # noqa: BLE001 - best-effort, never crash the ws callback
+    except Exception:
         _LOGGER.debug("Pre-warm failed for %s", event_id, exc_info=True)

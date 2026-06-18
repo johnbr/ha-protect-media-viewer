@@ -41,7 +41,7 @@ def make_clip_producer(client: ProtectClient):
             ok = await client.export_clip_to(
                 camera_id, clip_start, clip_end, dest, channel_index=_CHANNEL_INDEX
             )
-        except Exception:  # noqa: BLE001 - surface as a failed export, not a 500
+        except Exception:
             _LOGGER.exception("Clip export failed for event %s", event_id)
             return False
 

@@ -1,0 +1,55 @@
+[project]
+name = "protect-media-viewer"
+description = "Fast UniFi Protect smart-detection browser for Home Assistant."
+requires-python = ">=3.12"
+dynamic = ["version"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["__pycache__", "scripts"]
+
+[tool.ruff.lint]
+# Conservative ruleset — favors readability/safety over taste-based rewrites
+# so it won't churn untouched code. Add rules over time as confidence grows.
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes (unused imports, undefined names)
+    "W",      # pycodestyle warnings
+    "I",      # isort import ordering
+    "B",      # flake8-bugbear (likely bugs)
+    "UP",     # pyupgrade (modern syntax)
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",   # line length (handled by formatter)
+    "B008",   # function call as default argument (used by HA / voluptuous patterns)
+    "SIM108", # ternary-vs-if-else (subjective)
+    "SIM105", # try/except/pass vs contextlib.suppress (subjective; hot best-effort paths)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately import private helpers and use relaxed patterns.
+"tests/**" = ["F401", "F403", "B011"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+filterwarnings = [
+    "error",
+    # Home Assistant emits these during import; harmless for our purposes.
+    "ignore::DeprecationWarning:homeassistant.*",
+    "ignore::PendingDeprecationWarning",
+]

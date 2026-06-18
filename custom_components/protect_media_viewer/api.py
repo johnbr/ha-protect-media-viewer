@@ -20,11 +20,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
-
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
@@ -100,7 +98,7 @@ class EventsView(HomeAssistantView):
             )
 
         # Time range: explicit ISO start/end, else last N hours.
-        end = _parse_iso(request.query.get("end")) or datetime.now(tz=timezone.utc)
+        end = _parse_iso(request.query.get("end")) or datetime.now(tz=UTC)
         start = _parse_iso(request.query.get("start"))
         if start is None:
             hours = _int_param(request, "hours", _DEFAULT_HOURS, 24 * 365)
@@ -126,7 +124,7 @@ class EventsView(HomeAssistantView):
                 limit=limit,
                 offset=offset,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOGGER.exception("Failed to query smart detections")
             return self.json_message("Upstream query failed", status_code=502)
 
@@ -231,7 +229,7 @@ def _parse_iso(value: str | None) -> datetime | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt
 
 

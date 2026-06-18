@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-v-in-tag": true,
+  "include-component-in-tag": false,
+  "packages": {
+    ".": {
+      "package-name": "protect-media-viewer",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "custom_components/protect_media_viewer/manifest.json",
+          "jsonpath": "$.version"
+        },
+        "custom_components/protect_media_viewer/const.py"
+      ]
+    }
+  }
+}

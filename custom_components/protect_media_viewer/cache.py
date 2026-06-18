@@ -204,5 +204,5 @@ def _prune_dir(root: Path, max_bytes: int, pattern: str = "*") -> None:
         try:
             path.unlink()
             total -= st.st_size
-        except OSError:  # noqa: PERF203 - best-effort eviction
+        except OSError:
             _LOGGER.debug("Could not evict %s", path)

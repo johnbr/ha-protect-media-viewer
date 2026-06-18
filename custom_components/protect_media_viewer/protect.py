@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
-
 from uiprotect import ProtectApiClient
 from uiprotect.data import EventType, SmartDetectObjectType
 from uiprotect.exceptions import ClientError, NotAuthorized
@@ -186,7 +185,7 @@ class ProtectClient:
                     params=params,
                     raise_exception=False,
                 )
-            except Exception:  # noqa: BLE001 - treat any failure as "no thumb yet"
+            except Exception:
                 data = None
             if data:
                 return data
