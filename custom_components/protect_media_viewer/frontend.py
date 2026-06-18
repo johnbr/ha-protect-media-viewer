@@ -8,6 +8,7 @@ the user manually adding a Lovelace resource.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -26,17 +27,28 @@ _CARD_URL = f"/{DOMAIN}/{_CARD_FILENAME}"
 async def async_register_frontend(hass: HomeAssistant, version: str) -> None:
     """Register the static card file and load it on the frontend (once)."""
     card_path = Path(__file__).parent / "frontend" / _CARD_FILENAME
-    # Serve with caching enabled. We cache-bust per release via the ?v=
-    # query string below, so a new version always fetches fresh while a given
-    # version is served from the browser cache. Caching matters on mobile /
-    # tablet: without it the card module is re-downloaded on every dashboard
-    # load, widening the window where a view renders before the module has
-    # run customElements.define() — which surfaces as a transient
-    # "Configuration error" card until the script catches up or the page is
-    # reloaded.
+    # Serve with caching enabled, but cache-bust on the file's *content hash*
+    # rather than the release version. The static asset is served immutable, so
+    # browsers (especially the mobile/tablet Companion webview, which evicts and
+    # re-fetches unpredictably) hold onto a given ?v= copy indefinitely. Busting
+    # on `version` alone strands every device on a stale card whenever the JS is
+    # edited without a version bump — the card silently fails to register and
+    # the dashboard paints a "Configuration error" card until the URL changes.
+    # A content fingerprint changes the moment the file does, so a fresh build
+    # always fetches fresh while an unchanged build stays fully cached.
+    fingerprint = await hass.async_add_executor_job(_card_fingerprint, card_path)
     await hass.http.async_register_static_paths(
         [StaticPathConfig(_CARD_URL, str(card_path), cache_headers=True)]
     )
-    # Cache-bust on version so upgrades don't serve a stale card.
-    add_extra_js_url(hass, f"{_CARD_URL}?v={version}")
-    _LOGGER.debug("Registered Protect Media Viewer card at %s", _CARD_URL)
+    cache_bust = f"{version}-{fingerprint}" if fingerprint else version
+    add_extra_js_url(hass, f"{_CARD_URL}?v={cache_bust}")
+    _LOGGER.debug("Registered Protect Media Viewer card at %s?v=%s", _CARD_URL, cache_bust)
+
+
+def _card_fingerprint(card_path: Path) -> str:
+    """Short content hash of the card JS, used as the cache-bust token."""
+    try:
+        return hashlib.sha256(card_path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        _LOGGER.warning("Could not read %s to fingerprint the card", card_path)
+        return ""

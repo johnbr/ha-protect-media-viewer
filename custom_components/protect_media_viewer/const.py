@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Final
 
 DOMAIN: Final = "protect_media_viewer"
-# Keep in sync with manifest.json; used to cache-bust the frontend card.
-VERSION: Final = "0.1.12"
+# Keep in sync with manifest.json. Prefixes the frontend card cache-bust token;
+# the authoritative buster is the card file's content hash (see frontend.py).
+VERSION: Final = "0.1.13"
 
 # Config entry keys
 CONF_HOST: Final = "host"
