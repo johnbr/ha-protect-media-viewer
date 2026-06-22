@@ -1,13 +1,20 @@
 {
   "domain": "protect_media_viewer",
   "name": "Protect Media Viewer",
-  "codeowners": ["@johnbr"],
+  "codeowners": [
+    "@johnbr"
+  ],
   "config_flow": true,
-  "dependencies": ["http", "frontend"],
+  "dependencies": [
+    "http",
+    "frontend"
+  ],
   "documentation": "https://github.com/johnbr/ha-protect-media-viewer",
   "integration_type": "service",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/johnbr/ha-protect-media-viewer/issues",
-  "requirements": ["uiprotect>=6.0.0"],
-  "version": "0.1.13"
+  "requirements": [
+    "uiprotect>=6.0.0"
+  ],
+  "version": "0.1.14"
 }
