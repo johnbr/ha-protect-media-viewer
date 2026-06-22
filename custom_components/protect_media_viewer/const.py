@@ -8,7 +8,7 @@ DOMAIN: Final = "protect_media_viewer"
 # Bumped automatically by release-please (kept in lockstep with manifest.json).
 # Prefixes the frontend card cache-bust token; the authoritative buster is the
 # card file's content hash (see frontend.py).
-VERSION: Final = "0.1.13"  # x-release-please-version
+VERSION: Final = "0.1.14"  # x-release-please-version
 
 # Config entry keys
 CONF_HOST: Final = "host"
