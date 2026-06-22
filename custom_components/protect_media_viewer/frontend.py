@@ -27,18 +27,24 @@ _CARD_URL = f"/{DOMAIN}/{_CARD_FILENAME}"
 async def async_register_frontend(hass: HomeAssistant, version: str) -> None:
     """Register the static card file and load it on the frontend (once)."""
     card_path = Path(__file__).parent / "frontend" / _CARD_FILENAME
-    # Serve with caching enabled, but cache-bust on the file's *content hash*
-    # rather than the release version. The static asset is served immutable, so
-    # browsers (especially the mobile/tablet Companion webview, which evicts and
-    # re-fetches unpredictably) hold onto a given ?v= copy indefinitely. Busting
-    # on `version` alone strands every device on a stale card whenever the JS is
-    # edited without a version bump — the card silently fails to register and
-    # the dashboard paints a "Configuration error" card until the URL changes.
-    # A content fingerprint changes the moment the file does, so a fresh build
-    # always fetches fresh while an unchanged build stays fully cached.
+    # Serve the card *revalidating*, NOT cached-without-revalidation. Earlier
+    # versions used cache_headers=True (Cache-Control: public, max-age=1 month)
+    # to avoid re-downloading the module. That backfired: over that month the
+    # mobile/tablet Companion webview would
+    # occasionally cache a bad copy under a given ?v= URL — a partial download
+    # stored as a complete 200, or a 404 fetched in a window where the path
+    # wasn't registered yet — and "immutable" meant it never revalidated, so the
+    # module never ran customElements.define() and the dashboard painted a
+    # permanent "Configuration error" card. The only escape was minting a new
+    # ?v= (a manual cache-bust). cache_headers=False lets aiohttp serve with
+    # Last-Modified/ETag, so the webview does a conditional GET each load: a
+    # cheap 304 when unchanged, fresh bytes when changed, and crucially it can
+    # never get permanently wedged on a broken cached copy. (A ~16 KB module
+    # revalidated over the LAN costs nothing.) The content-hash ?v= below stays
+    # as belt-and-suspenders so the URL still changes the instant the file does.
     fingerprint = await hass.async_add_executor_job(_card_fingerprint, card_path)
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(_CARD_URL, str(card_path), cache_headers=True)]
+        [StaticPathConfig(_CARD_URL, str(card_path), cache_headers=False)]
     )
     cache_bust = f"{version}-{fingerprint}" if fingerprint else version
     add_extra_js_url(hass, f"{_CARD_URL}?v={cache_bust}")
