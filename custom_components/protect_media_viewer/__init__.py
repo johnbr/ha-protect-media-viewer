@@ -15,6 +15,7 @@ from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNA
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.typing import ConfigType
 
 from .api import async_register_views
 from .cache import ClipCache, ThumbnailCache
@@ -42,7 +43,26 @@ type ProtectMediaViewerEntry = ConfigEntry[RuntimeData]
 
 _THUMB_CACHE_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB; thumbnails are ~30-40 KB each
 _PRUNE_INTERVAL = timedelta(hours=6)
-_VIEWS_REGISTERED = f"{DOMAIN}_views_registered"
+_GLOBALS_REGISTERED = f"{DOMAIN}_globals_registered"
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the HTTP views and the dashboard card.
+
+    These are process-global and, importantly, have NO dependency on the NVR
+    connection — the views resolve runtime data per request (returning 4xx until
+    an entry is ready) and the card degrades to a "Failed to load events" state.
+    Registering them here, rather than inside async_setup_entry behind
+    ``client.connect()``, guarantees the card JS is served and injected into the
+    frontend even when the NVR is unreachable or slow at boot (a config entry in
+    ConfigEntryNotReady/retry must never strand every dashboard without the
+    card, surfacing as a "Configuration error"). Runs exactly once per process.
+    """
+    if not hass.data.get(_GLOBALS_REGISTERED):
+        async_register_views(hass)
+        await async_register_frontend(hass, VERSION)
+        hass.data[_GLOBALS_REGISTERED] = True
+    return True
 
 
 async def async_setup_entry(
@@ -91,11 +111,8 @@ async def async_setup_entry(
     entry.runtime_data = runtime
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
-    # Views + frontend are global; register exactly once across all entries.
-    if not hass.data.get(_VIEWS_REGISTERED):
-        async_register_views(hass)
-        await async_register_frontend(hass, VERSION)
-        hass.data[_VIEWS_REGISTERED] = True
+    # (The HTTP views + dashboard card are registered once in async_setup, so the
+    # card is served regardless of whether this NVR connection succeeded.)
 
     # Realtime pre-warm of new detections.
     ws_unsub = async_start_prewarmer(hass, runtime)
