@@ -76,6 +76,40 @@ URLs are guarded by a stable per-event token derived from a secret stored in the
 config entry, so they can be loaded directly in `<img>` / `<video>` tags, are
 cacheable by the browser, and keep working across restarts.
 
+The card itself is delivered through a small loader module that is registered
+both as a frontend module and as a Lovelace resource (you will see one
+`protect-media-viewer-loader.js` entry under **Settings → Dashboards →
+Resources**; it is recreated on restart if removed). The loader retries the
+card import with backoff — mobile page loads routinely race a network gap, and
+a browser only ever attempts a module script once — and reports failures to
+`POST /api/protect_media_viewer/log`.
+
+## Troubleshooting
+
+**A card shows "Configuration error"** — Home Assistant paints this when the
+`protect-media-viewer-card` element was never defined in that page session,
+i.e. the card JS failed to load (historically: a network gap during app
+startup on mobile, or a page loaded while HA was still booting). The loader
+now retries and self-heals these, and every failure/recovery is written to the
+HA log at WARNING level, e.g.:
+
+```
+Frontend reported card_load_recovered (attempts=4, ua=Home Assistant/…)
+```
+
+Check **Settings → System → Logs** and filter for `protect_media_viewer`. If
+you see `card_load_gave_up`, the device could not fetch the card JS at all for
+~15 minutes — check connectivity/proxy rules for `/protect_media_viewer/*`.
+
+For request-level detail (every serve of the loader/card, 200 vs 304, per
+user agent), enable debug logging:
+
+```yaml
+logger:
+  logs:
+    custom_components.protect_media_viewer: debug
+```
+
 ## Development
 
 Backend checks run against a live NVR using the `UNIFI_HOST`, `UNIFI_USERNAME`

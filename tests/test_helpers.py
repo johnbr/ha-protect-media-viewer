@@ -16,11 +16,15 @@ from types import SimpleNamespace
 
 from custom_components.protect_media_viewer import const
 from custom_components.protect_media_viewer.api import (
+    _CLIENT_LOG_EVENTS,
     _check_token,
+    _format_client_log,
     _int_param,
     _make_token,
     _media_url,
     _parse_iso,
+    _RateLimiter,
+    _sanitize_client_text,
 )
 from custom_components.protect_media_viewer.cache import (
     _is_valid_jpeg,
@@ -28,7 +32,7 @@ from custom_components.protect_media_viewer.cache import (
     _read_if_exists,
     _write_atomic,
 )
-from custom_components.protect_media_viewer.frontend import _card_fingerprint
+from custom_components.protect_media_viewer.frontend import _etag_of, _render_loader
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPONENT = _REPO_ROOT / "custom_components" / "protect_media_viewer"
@@ -205,28 +209,69 @@ def test_prune_dir_noop_when_under_cap(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Card cache-bust fingerprint (frontend._card_fingerprint)
+# Card serving: ETag / cache-bust fingerprint + loader templating (frontend.py)
 # ---------------------------------------------------------------------------
 
 
-def test_card_fingerprint_is_short_hex():
-    fp = _card_fingerprint(_COMPONENT / "frontend" / "protect-media-viewer-card.js")
-    assert len(fp) == 12
-    assert all(c in "0123456789abcdef" for c in fp)
+def test_etag_is_short_hex_and_deterministic():
+    tag = _etag_of(b"console.log(1)")
+    assert len(tag) == 32
+    assert all(c in "0123456789abcdef" for c in tag)
+    assert tag == _etag_of(b"console.log(1)")
+    assert tag != _etag_of(b"console.log(2)")
 
 
-def test_card_fingerprint_changes_with_content(tmp_path):
-    a = tmp_path / "a.js"
-    b = tmp_path / "b.js"
-    a.write_bytes(b"console.log(1)")
-    b.write_bytes(b"console.log(2)")
-    assert _card_fingerprint(a) != _card_fingerprint(b)
-    # Same content -> same fingerprint.
-    assert _card_fingerprint(a) == _card_fingerprint(a)
+def test_render_loader_bakes_card_url():
+    template = (_COMPONENT / "frontend" / "protect-media-viewer-loader.js").read_text()
+    out = _render_loader(template, "/protect_media_viewer/card.js?v=1-abc")
+    assert "/protect_media_viewer/card.js?v=1-abc" in out
+    assert "__CARD_URL__" not in out
 
 
-def test_card_fingerprint_missing_file_is_empty(tmp_path):
-    assert _card_fingerprint(tmp_path / "absent.js") == ""
+def test_loader_has_retry_and_reporting_machinery():
+    """Guard the loader's load-bearing pieces against accidental removal."""
+    loader = (_COMPONENT / "frontend" / "protect-media-viewer-loader.js").read_text()
+    # Retries must cache-bust (failed module fetches are cached in the module map).
+    assert "&r=" in loader
+    # Retry immediately when connectivity returns.
+    assert '"online"' in loader
+    # Double-delivery guard (extra_js_url + Lovelace resource).
+    assert "__protectMediaViewerLoader" in loader
+    # Failure reporting endpoint, matching the ClientLogView vocabulary.
+    assert "/api/protect_media_viewer/log" in loader
+    for event in _CLIENT_LOG_EVENTS:
+        assert event in loader
+
+
+# ---------------------------------------------------------------------------
+# Client log endpoint helpers (api.py)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_client_text_strips_and_caps():
+    assert _sanitize_client_text("ok\x1b[31m\nline", 100) == "ok[31mline"
+    assert _sanitize_client_text("a" * 500, 300) == "a" * 300
+    assert _sanitize_client_text(None, 100) == ""
+    assert _sanitize_client_text(42, 100) == ""
+
+
+def test_format_client_log_composes():
+    msg = _format_client_log("card_load_recovered", 4, "TypeError: x", "Mozilla/5.0")
+    assert "card_load_recovered" in msg
+    assert "attempts=4" in msg
+    assert "Mozilla/5.0" in msg
+    assert msg.endswith("TypeError: x")
+    # Empty detail/UA still make a sane line.
+    assert "ua=-" in _format_client_log("card_load_failed", 1, "", "")
+
+
+def test_rate_limiter_sliding_window():
+    clock = SimpleNamespace(now=0.0)
+    limiter = _RateLimiter(3, 60, clock=lambda: clock.now)
+    assert limiter.allow() and limiter.allow() and limiter.allow()
+    assert not limiter.allow()  # window full
+    clock.now = 61.0  # window slides
+    assert limiter.allow()
 
 
 # ---------------------------------------------------------------------------
