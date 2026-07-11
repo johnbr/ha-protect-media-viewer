@@ -152,6 +152,37 @@ async function main() {
   assert.strictEqual(grid2.children.length, 150, `paged to all 150 tiles (got ${grid2.children.length})`);
   assert.match(el2.shadowRoot.querySelector(".status").textContent, /150 detections/, "shows final count");
 
+  // --- Flaky-API scenario: transient failures must self-heal via retry. ---
+  // (Mobile network handoffs and HA-still-booting 400s look exactly like this.)
+  let failuresLeft = 2;
+  const flakyHass = {
+    async callApi(method, path) {
+      if (path.startsWith("protect_media_viewer/cameras")) return { cameras: [] };
+      if (failuresLeft > 0) {
+        failuresLeft -= 1;
+        throw new Error("transient failure");
+      }
+      return {
+        events: [makeEvent("f1", ["person"], "roof")],
+        count: 1, offset: 0, limit: 60, has_more: false,
+      };
+    },
+  };
+  const el3 = document.createElement("protect-media-viewer-card");
+  el3.setConfig({ title: "Flaky", retry_base_ms: 1 });
+  document.body.appendChild(el3);
+  const realError = console.error; // the injected failures are expected noise
+  console.error = () => {};
+  el3.hass = flakyHass;
+
+  const grid3 = el3.shadowRoot.querySelector(".grid");
+  const deadline3 = Date.now() + 2000;
+  while (grid3.children.length < 1 && Date.now() < deadline3) await tick();
+  console.error = realError;
+  assert.strictEqual(grid3.children.length, 1, "flaky API self-healed after retries");
+  assert.strictEqual(failuresLeft, 0, "both injected failures were consumed");
+  assert.match(el3.shadowRoot.querySelector(".status").textContent, /1 detections/, "final status is healthy");
+
   console.log("Card smoke test: SUCCESS (all assertions passed)");
 }
 

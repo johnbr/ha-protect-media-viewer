@@ -105,6 +105,7 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._events = [];
     this._offset = 0;
     this._hasMore = true;
+    this._loadRetries = 0;
     this._grid.innerHTML = "";
     this._setStatus("");
     this._loadMore();
@@ -138,6 +139,7 @@ class ProtectMediaViewerCard extends HTMLElement {
 
     try {
       const res = await this._api(`protect_media_viewer/events?${params.join("&")}`);
+      this._loadRetries = 0;
       const events = res.events || [];
       this._offset += res.limit || this._pageSize();
       this._hasMore = !!res.has_more;
@@ -165,8 +167,23 @@ class ProtectMediaViewerCard extends HTMLElement {
       }
     } catch (err) {
       console.error("protect-media-viewer: events query failed", err);
-      this._setStatus("Failed to load events.");
-      this._hasMore = false;
+      // Transient failures are normal on mobile (network handoff, page loaded
+      // while HA is still booting so the API 400s until the entry is ready) —
+      // retry with backoff before settling into the failed state.
+      this._loadRetries = (this._loadRetries || 0) + 1;
+      if (this._loadRetries <= 5) {
+        this._setStatus("Failed to load events — retrying…");
+        const base = this._config.retry_base_ms || 2000;
+        const delay = Math.min(30000, base * 2 ** (this._loadRetries - 1));
+        setTimeout(() => {
+          if (!this.isConnected) return;
+          if (!this._cameras.length) this._loadCameras();
+          this._loadMore();
+        }, delay);
+      } else {
+        this._setStatus("Failed to load events.");
+        this._hasMore = false;
+      }
     } finally {
       this._loading = false;
     }

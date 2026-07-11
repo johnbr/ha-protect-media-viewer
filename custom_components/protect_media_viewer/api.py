@@ -20,6 +20,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import time
+from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
@@ -35,6 +38,13 @@ _API_BASE = f"/api/{DOMAIN}"
 _MAX_LIMIT = 200
 _DEFAULT_LIMIT = 60
 _DEFAULT_HOURS = 24
+
+# Events the card loader may report (see frontend/protect-media-viewer-loader.js).
+_CLIENT_LOG_EVENTS = frozenset(
+    {"card_load_failed", "card_load_recovered", "card_load_gave_up"}
+)
+_CLIENT_LOG_MAX_PER_HOUR = 30
+_CLIENT_LOG_DETAIL_MAX = 300
 
 
 def _make_token(secret: str, kind: str, event_id: str) -> str:
@@ -221,6 +231,82 @@ class ClipView(HomeAssistantView):
         )
 
 
+def _sanitize_client_text(value: object, max_len: int) -> str:
+    """Reduce client-supplied text to something safe to put in the HA log."""
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value if ch.isprintable())[:max_len]
+
+
+def _format_client_log(event: str, attempts: int, detail: str, user_agent: str) -> str:
+    msg = f"Frontend reported {event} (attempts={attempts}, ua={user_agent or '-'})"
+    if detail:
+        msg += f": {detail}"
+    return msg
+
+
+class _RateLimiter:
+    """Global sliding-window limiter for the unauthenticated log endpoint."""
+
+    def __init__(
+        self, max_events: int, window_s: float, clock: Callable[[], float] = time.monotonic
+    ) -> None:
+        self._max = max_events
+        self._window = window_s
+        self._clock = clock
+        self._stamps: deque[float] = deque()
+
+    def allow(self) -> bool:
+        now = self._clock()
+        while self._stamps and now - self._stamps[0] > self._window:
+            self._stamps.popleft()
+        if len(self._stamps) >= self._max:
+            return False
+        self._stamps.append(now)
+        return True
+
+
+class ClientLogView(HomeAssistantView):
+    """Let the card loader surface load failures in the HA log.
+
+    Unauthenticated on purpose: the loader calls it precisely when the page has
+    no working hass connection yet (that's what's being diagnosed). Hardened
+    instead: fixed event vocabulary, clamped integers, printable+length-capped
+    detail text, and a global rate limit.
+    """
+
+    url = f"{_API_BASE}/log"
+    name = f"api:{DOMAIN}:log"
+    requires_auth = False
+
+    def __init__(self) -> None:
+        self._limiter = _RateLimiter(_CLIENT_LOG_MAX_PER_HOUR, 3600)
+
+    async def post(self, request: web.Request) -> web.Response:
+        if not self._limiter.allow():
+            return web.Response(status=429)
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.Response(status=400)
+        if not isinstance(payload, dict):
+            return web.Response(status=400)
+
+        event = payload.get("event")
+        if event not in _CLIENT_LOG_EVENTS:
+            return web.Response(status=400)
+        attempts = payload.get("attempts")
+        if not isinstance(attempts, int) or not 0 <= attempts <= 1000:
+            attempts = 0
+        detail = _sanitize_client_text(payload.get("detail"), _CLIENT_LOG_DETAIL_MAX)
+        ua = _sanitize_client_text(request.headers.get("User-Agent"), 200)
+
+        # WARNING so it is visible without enabling debug logging — this is the
+        # trail for the intermittent mobile "Configuration error" reports.
+        _LOGGER.warning("%s", _format_client_log(event, attempts, detail, ua))
+        return web.Response(status=204)
+
+
 def _parse_iso(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -239,3 +325,4 @@ def async_register_views(hass: HomeAssistant) -> None:
     hass.http.register_view(CamerasView())
     hass.http.register_view(ThumbnailView())
     hass.http.register_view(ClipView())
+    hass.http.register_view(ClientLogView())
