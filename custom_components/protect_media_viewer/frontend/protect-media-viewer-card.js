@@ -41,6 +41,9 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._camera = "";
     this._hours = 24;
     this._io = null;
+    this._onScroll = null;
+    this._onKey = null;
+    this._watching = false;
     this._cameras = [];
   }
 
@@ -62,14 +65,80 @@ class ProtectMediaViewerCard extends HTMLElement {
   }
 
   connectedCallback() {
+    // Fires MORE THAN ONCE. A `conditional` card removes its child from the
+    // DOM when the condition goes false and re-appends it when it comes back
+    // (hui-conditional-base.setVisibility), so an accordion fold detaches and
+    // reattaches this card on every close/open. `_ensureBuilt()` no-ops after
+    // the first build — the shadow DOM survives the detach — so the watchers
+    // that disconnectedCallback() tore down have to be re-attached here, or a
+    // reopened fold keeps its tiles but has lost infinite scroll.
     this._ensureBuilt();
+    this._attachWatchers();
   }
 
   disconnectedCallback() {
-    if (this._io) this._io.disconnect();
+    this._detachWatchers();
+  }
+
+  // ---- document/window watchers -------------------------------------------
+  // Kept out of _render() so they can be re-established on reattach without
+  // rebuilding (and torn down on detach) — see connectedCallback().
+
+  _attachWatchers() {
+    if (this._watching || !this._built || !this.isConnected) return;
+    if (!this._sentinel) return;
+    this._watching = true;
+
+    // Infinite scroll. We use several triggers because an IntersectionObserver
+    // alone is unreliable inside Home Assistant's nested scroll containers:
+    //  - the observer (works when it fires),
+    //  - a capturing scroll listener on window (catches scrolling in any
+    //    ancestor scroll container, since scroll events don't bubble),
+    //  - a resize listener,
+    //  - an auto-fill after each page so the first screenful always fills.
+    // Observing an already-visible sentinel delivers an initial callback, so a
+    // reattached card that is short of a screenful pages itself back up.
+    this._io = new IntersectionObserver(() => this._maybeLoadMore(), {
+      root: this._scrollEl,
+      rootMargin: "800px",
+    });
+    this._io.observe(this._sentinel);
+
+    // Throttle to one check per frame (scroll fires very frequently; the check
+    // calls getBoundingClientRect which forces layout).
+    this._onScroll = () => {
+      if (this._scrollScheduled) return;
+      this._scrollScheduled = true;
+      requestAnimationFrame(() => {
+        this._scrollScheduled = false;
+        this._maybeLoadMore();
+      });
+    };
+    window.addEventListener("scroll", this._onScroll, true);
+    window.addEventListener("resize", this._onScroll, true);
+
+    // Escape closes the player. On `document`, so it must come off again on
+    // detach — otherwise every fold close leaves a listener holding this card.
+    this._onKey = (e) => {
+      if (e.key === "Escape") this._closePlayer();
+    };
+    document.addEventListener("keydown", this._onKey);
+  }
+
+  _detachWatchers() {
+    this._watching = false;
+    if (this._io) {
+      this._io.disconnect();
+      this._io = null;
+    }
     if (this._onScroll) {
       window.removeEventListener("scroll", this._onScroll, true);
       window.removeEventListener("resize", this._onScroll, true);
+      this._onScroll = null;
+    }
+    if (this._onKey) {
+      document.removeEventListener("keydown", this._onKey);
+      this._onKey = null;
     }
   }
 
@@ -192,6 +261,10 @@ class ProtectMediaViewerCard extends HTMLElement {
   // ---- rendering ----------------------------------------------------------
 
   _render() {
+    // Replacing the shadow DOM orphans anything watching the old nodes (the
+    // setConfig rebuild path lands here too).
+    this._detachWatchers();
+
     const minCol = this._config.columns || 180;
     // Bounded height for the scrolling grid area; accepts any CSS length.
     const scrollHeight = this._config.height || "70vh";
@@ -326,42 +399,17 @@ class ProtectMediaViewerCard extends HTMLElement {
       this._reset();
     });
 
-    // Player modal close handlers.
+    // Player modal close handlers. These live on shadow-DOM nodes, so they go
+    // away with the nodes themselves — unlike the document/window watchers,
+    // which _attachWatchers() owns.
     const close = () => this._closePlayer();
     this.shadowRoot.querySelector(".modal .close").addEventListener("click", close);
     this._modal.addEventListener("click", (e) => {
       if (e.target === this._modal) close();
     });
-    document.addEventListener("keydown", this._onKey = (e) => {
-      if (e.key === "Escape") close();
-    });
 
-    // Infinite scroll. We use several triggers because an IntersectionObserver
-    // alone is unreliable inside Home Assistant's nested scroll containers:
-    //  - the observer (works when it fires),
-    //  - a capturing scroll listener on window (catches scrolling in any
-    //    ancestor scroll container, since scroll events don't bubble),
-    //  - a resize listener,
-    //  - an auto-fill after each page so the first screenful always fills.
     this._sentinel = this.shadowRoot.querySelector(".sentinel");
-    this._io = new IntersectionObserver(() => this._maybeLoadMore(), {
-      root: this._scrollEl,
-      rootMargin: "800px",
-    });
-    this._io.observe(this._sentinel);
-
-    // Throttle to one check per frame (scroll fires very frequently; the check
-    // calls getBoundingClientRect which forces layout).
-    this._onScroll = () => {
-      if (this._scrollScheduled) return;
-      this._scrollScheduled = true;
-      requestAnimationFrame(() => {
-        this._scrollScheduled = false;
-        this._maybeLoadMore();
-      });
-    };
-    window.addEventListener("scroll", this._onScroll, true);
-    window.addEventListener("resize", this._onScroll, true);
+    this._attachWatchers();
   }
 
   _maybeLoadMore() {
