@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.16](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.15...v0.1.16) (2026-08-24)
+
+
+### Bug Fixes
+
+* re-establish scroll watchers when a conditional fold reattaches the card ([#5](https://github.com/johnbr/ha-protect-media-viewer/issues/5)) ([ab84788](https://github.com/johnbr/ha-protect-media-viewer/commit/ab84788b3b1770fb20262fa153a9ba198180b68b))
+
 ## [0.1.15](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.14...v0.1.15) (2026-07-11)
 
 
