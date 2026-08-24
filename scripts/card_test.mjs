@@ -183,6 +183,71 @@ async function main() {
   assert.strictEqual(failuresLeft, 0, "both injected failures were consumed");
   assert.match(el3.shadowRoot.querySelector(".status").textContent, /1 detections/, "final status is healthy");
 
+  // --- Accordion scenario: a `conditional` fold DETACHES the card. ---
+  // hui-conditional-base.setVisibility() removes its child from the DOM when
+  // the condition goes false and re-appends it when it comes back, so a fold
+  // close/open is a disconnect/connect. The shadow DOM survives, so
+  // _ensureBuilt() no-ops on the way back in — the document/window watchers
+  // must be torn down and re-established explicitly, or the reopened card
+  // keeps its tiles and silently loses infinite scroll (and leaks one keydown
+  // listener per cycle).
+  const ioLog = [];
+  global.IntersectionObserver = class {
+    constructor() {
+      this.targets = 0;
+      this.disconnected = false;
+      ioLog.push(this);
+    }
+    observe() { this.targets += 1; }
+    unobserve() { this.targets -= 1; }
+    disconnect() { this.targets = 0; this.disconnected = true; }
+  };
+
+  // Count only what happens from here on (the cards above keep theirs).
+  const live = { scroll: 0, resize: 0, keydown: 0 };
+  for (const target of [window, document]) {
+    const add = target.addEventListener.bind(target);
+    const remove = target.removeEventListener.bind(target);
+    target.addEventListener = (type, fn, opts) => {
+      if (type in live) live[type] += 1;
+      return add(type, fn, opts);
+    };
+    target.removeEventListener = (type, fn, opts) => {
+      if (type in live) live[type] -= 1;
+      return remove(type, fn, opts);
+    };
+  }
+
+  const el4 = document.createElement("protect-media-viewer-card");
+  el4.setConfig({ title: "Fold" });
+  document.body.appendChild(el4);
+  el4.hass = hass;
+  await tick();
+  await tick();
+
+  assert.strictEqual(
+    el4.shadowRoot.querySelector(".grid").children.length, 3, "fold card built"
+  );
+  assert.deepStrictEqual(live, { scroll: 1, resize: 1, keydown: 1 }, "watchers attached on build");
+  assert.strictEqual(ioLog.at(-1).targets, 1, "sentinel observed");
+
+  for (const cycle of [1, 2]) {
+    const io = ioLog.at(-1);
+
+    el4.remove(); // fold closes
+    assert.ok(io.disconnected, `cycle ${cycle}: observer disconnected on detach`);
+    assert.deepStrictEqual(live, { scroll: 0, resize: 0, keydown: 0 },
+      `cycle ${cycle}: every watcher released on detach`);
+
+    document.body.appendChild(el4); // fold reopens
+    assert.strictEqual(el4.shadowRoot.querySelector(".grid").children.length, 3,
+      `cycle ${cycle}: tiles survived the fold`);
+    assert.deepStrictEqual(live, { scroll: 1, resize: 1, keydown: 1 },
+      `cycle ${cycle}: watchers restored exactly once`);
+    assert.notStrictEqual(ioLog.at(-1), io, `cycle ${cycle}: a fresh observer is watching`);
+    assert.strictEqual(ioLog.at(-1).targets, 1, `cycle ${cycle}: sentinel observed again`);
+  }
+
   console.log("Card smoke test: SUCCESS (all assertions passed)");
 }
 
