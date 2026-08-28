@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.17](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.16...v0.1.17) (2026-08-28)
+
+
+### Bug Fixes
+
+* define the card on the first fetch, not a second round trip ([#7](https://github.com/johnbr/ha-protect-media-viewer/issues/7)) ([309eeb8](https://github.com/johnbr/ha-protect-media-viewer/commit/309eeb851efdd06f40efd33774bdc51c774989fa))
+
 ## [0.1.16](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.15...v0.1.16) (2026-08-24)
 
 
