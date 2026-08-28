@@ -4,12 +4,31 @@ Delivery is layered to survive the Companion app's real-world failure modes,
 each of which used to strand a page session with no defined card element and
 therefore a permanent "Configuration error" card:
 
-1. A tiny *loader* module is what the frontend actually loads, not the card
-   itself. The browser makes exactly one attempt at a ``<script
-   type="module">`` and caches the failure, and mobile page loads routinely
-   race a network gap (Wi-Fi waking up, Wi-Fi/cellular handoff). The loader
-   dynamic-imports the card with retry/backoff and reports failures to the
-   integration's ``/log`` endpoint so they show up in the HA log.
+1. What the frontend loads is a *composed* module: the card source with the
+   retry loader appended, served as one body. The card therefore runs
+   ``customElements.define()`` during that module's own evaluation — the
+   FIRST network round trip — and the loader that follows it finds the
+   element already defined and no-ops.
+
+   The card used to be a separate dynamic ``import()`` issued by the loader,
+   which cost a second, serial round trip that could not even begin until the
+   first response had been parsed and executed. That lost a race it did not
+   need to enter: Home Assistant's service worker serves the app shell and
+   ``/frontend_latest/*`` CacheFirst (the dashboard boots with zero network)
+   while every custom card module is NetworkFirst, and HA waits only 2s for a
+   custom element before painting ``hui-error-card`` — whose title, when the
+   config carries ``message`` rather than ``error``, is the bare string
+   "Configuration error" with nothing on screen naming the cause. Every
+   module fetch succeeded in the logs and the loader never reported a
+   failure; the card was simply late. Composing removes the extra round trip
+   AND the whole failure mode the retry existed for, since one fetch now
+   carries both jobs.
+
+   The loader is kept, and the card stays separately addressable at
+   ``_CARD_URL``, purely as belt and braces: if the composed body somehow
+   evaluated without defining the element, the loader dynamic-imports the
+   card with retry/backoff and reports to the integration's ``/log``
+   endpoint so it shows up in the HA log.
 
 2. Both files are served with ``Cache-Control: max-age=0,
    stale-while-revalidate`` plus a strong ETag. Every load revalidates, so a
@@ -18,16 +37,18 @@ therefore a permanent "Configuration error" card:
    still served instantly when the device is momentarily offline, which is
    exactly the window in which mobile page loads happen.
 
-3. The loader is registered BOTH via ``add_extra_js_url`` (browser_mod
-   pattern) and as a *persisted* Lovelace resource (HACS pattern, storage mode
-   only). extra_module_url entries are baked into the page at render time, so
-   a page fetched while HA is still booting — the Companion app reconnects
-   aggressively during restarts — would otherwise never reference the card at
-   all. The resource registry lives in ``.storage/lovelace_resources`` and is
-   delivered over the websocket when the dashboard loads, closing that window.
-   The two registrations use distinct query strings so a failed fetch of one
-   cannot poison the other's module-map entry; the loader self-guards so only
-   one copy runs.
+3. The composed module is registered BOTH via ``add_extra_js_url``
+   (browser_mod pattern) and as a *persisted* Lovelace resource (HACS
+   pattern, storage mode only). extra_module_url entries are baked into the
+   page at render time, so a page fetched while HA is still booting — the
+   Companion app reconnects aggressively during restarts — would otherwise
+   never reference the card at all. The resource registry lives in
+   ``.storage/lovelace_resources`` and is delivered over the websocket when
+   the dashboard loads, closing that window. The two registrations use
+   distinct query strings so a failed fetch of one cannot poison the other's
+   module-map entry — either copy alone defines the card, and both the
+   ``customElements.define()`` guard and the loader's own window flag make
+   evaluating the second copy a no-op.
 """
 
 from __future__ import annotations
@@ -69,6 +90,21 @@ def _render_loader(template: str, card_url: str) -> str:
     return template.replace(_LOADER_PLACEHOLDER, card_url)
 
 
+def _compose_loader(card_source: str, loader_template: str, card_url: str) -> str:
+    """Concatenate the card ahead of the loader into one served module.
+
+    Order is load-bearing: the card defines the custom element as this module
+    evaluates, so the loader that follows finds it already defined and never
+    issues the fallback import. Concatenation (rather than an import) is what
+    removes the second round trip — see point 1 of the module docstring.
+
+    Safe because neither file is a real ES module in the linking sense: the
+    card has no top-level import/export and declares only its own names, and
+    the loader is a self-contained IIFE. A guard test asserts both properties.
+    """
+    return f"{card_source}\n{_render_loader(loader_template, card_url)}"
+
+
 class ModuleView(HomeAssistantView):
     """Serve one frontend JS module from memory with ETag + SWR caching.
 
@@ -100,19 +136,22 @@ class ModuleView(HomeAssistantView):
 
 
 async def async_register_frontend(hass: HomeAssistant, version: str) -> None:
-    """Serve the loader + card and register the loader with the frontend."""
+    """Serve the card, the composed module, and register it with the frontend."""
     base = Path(__file__).parent / "frontend"
-    card_body: bytes = await hass.async_add_executor_job(
-        (base / _CARD_FILENAME).read_bytes
+    card_source: str = await hass.async_add_executor_job(
+        (base / _CARD_FILENAME).read_text
     )
     loader_template: str = await hass.async_add_executor_job(
         (base / _LOADER_FILENAME).read_text
     )
+    card_body = card_source.encode()
 
     # Cache-bust on content, not release version: the ?v= is only a cache key —
     # the views below always serve the current bytes regardless of ?v=.
+    # The loader's fingerprint covers the composed body, so editing EITHER file
+    # moves it.
     card_url = f"{_CARD_URL}?v={version}-{_etag_of(card_body)[:12]}"
-    loader_body = _render_loader(loader_template, card_url).encode()
+    loader_body = _compose_loader(card_source, loader_template, card_url).encode()
     loader_url = f"{_LOADER_URL}?v={version}-{_etag_of(loader_body)[:12]}"
 
     hass.http.register_view(ModuleView(_CARD_URL, f"frontend:{DOMAIN}:card", card_body))

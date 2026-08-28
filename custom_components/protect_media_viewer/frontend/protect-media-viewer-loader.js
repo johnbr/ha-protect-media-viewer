@@ -1,19 +1,25 @@
 /*
  * Protect Media Viewer card loader.
  *
- * Why a loader instead of loading the card module directly: the browser makes
- * exactly ONE attempt to fetch a <script type="module">, and a failed module
- * fetch is cached in the page's module map, so nothing ever retries it. On
+ * frontend.py serves this file with the CARD SOURCE PREPENDED, as one module.
+ * By the time this code runs the card has therefore already called
+ * customElements.define() in the same evaluation, and the first thing
+ * tryLoad() does is notice that and stop. This is the normal path, and it is
+ * the point: defining the element costs zero network round trips beyond the
+ * one that fetched this file.
+ *
+ * The retry machinery below is the fallback for the pathological case where
+ * this module evaluated without the element being defined. It matters because
+ * the browser makes exactly ONE attempt to fetch a <script type="module"> and
+ * caches the failure in the page's module map, so nothing ever retries it. On
  * phones/tablets the Companion app routinely (re)loads the page inside a
  * network gap — Wi-Fi still re-associating after wake, a Wi-Fi/cellular
- * handoff, or Home Assistant itself still booting. The app shell comes out of
- * the service-worker cache and renders fine, but the card module fetch fails
- * once, customElements.define() never runs, and every card paints Home
- * Assistant's "Configuration error" until a manual reload.
+ * handoff, or Home Assistant itself still booting — and HA paints its
+ * "Configuration error" card after waiting only 2s for an undefined element.
  *
- * This loader dynamic-imports the card and retries with backoff (and
- * immediately when connectivity returns), and reports failures/recoveries to
- * the integration's /log endpoint so they are visible in the HA log.
+ * So: dynamic-import the card, retry with backoff (and immediately when
+ * connectivity returns), and report failures/recoveries to the integration's
+ * /log endpoint so they are visible in the HA log.
  */
 
 (() => {
@@ -53,6 +59,12 @@
   const tryLoad = () => {
     timer = null;
     if (loaded) return;
+    // Normal path: the card source is served ahead of this file and has
+    // already defined the element. Nothing to fetch.
+    if (customElements.get(TAG)) {
+      loaded = true;
+      return;
+    }
     attempts += 1;
     // Retries must cache-bust: the module map caches failures, so re-importing
     // the SAME URL rejects instantly without touching the network. A changed

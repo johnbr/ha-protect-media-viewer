@@ -32,7 +32,11 @@ from custom_components.protect_media_viewer.cache import (
     _read_if_exists,
     _write_atomic,
 )
-from custom_components.protect_media_viewer.frontend import _etag_of, _render_loader
+from custom_components.protect_media_viewer.frontend import (
+    _compose_loader,
+    _etag_of,
+    _render_loader,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPONENT = _REPO_ROOT / "custom_components" / "protect_media_viewer"
@@ -226,6 +230,52 @@ def test_render_loader_bakes_card_url():
     out = _render_loader(template, "/protect_media_viewer/card.js?v=1-abc")
     assert "/protect_media_viewer/card.js?v=1-abc" in out
     assert "__CARD_URL__" not in out
+
+
+def test_composed_loader_defines_the_card_before_the_loader_runs():
+    """The served module must carry the card, and carry it FIRST.
+
+    This is the whole fix for the intermittent "Configuration error": the card
+    element is defined during this module's own evaluation, so it costs no
+    round trip beyond the one that fetched the module. If the card ever ends
+    up after the loader — or absent — the element is late again and HA paints
+    its 2s-grace error card.
+    """
+    card = (_COMPONENT / "frontend" / "protect-media-viewer-card.js").read_text()
+    loader = (_COMPONENT / "frontend" / "protect-media-viewer-loader.js").read_text()
+    out = _compose_loader(card, loader, "/protect_media_viewer/card.js?v=1-abc")
+
+    define = 'customElements.define("protect-media-viewer-card"'
+    assert define in out
+    assert "__protectMediaViewerLoader" in out
+    assert out.index(define) < out.index("__protectMediaViewerLoader")
+    # The card URL is still baked in for the fallback import path.
+    assert "/protect_media_viewer/card.js?v=1-abc" in out
+    assert "__CARD_URL__" not in out
+
+
+def test_card_is_concatenation_safe():
+    """Guard the two properties that make prepending the card legal.
+
+    A top-level import/export would make the composed body a real ES module
+    with linking semantics, and a top-level name shared with the loader would
+    collide. The loader is an IIFE, so only the card's own names are exposed.
+    """
+    card = (_COMPONENT / "frontend" / "protect-media-viewer-card.js").read_text()
+    for line in card.splitlines():
+        stripped = line.strip()
+        assert not stripped.startswith("import "), line
+        assert not stripped.startswith("export "), line
+        assert not stripped.startswith("import("), line
+
+
+def test_loader_no_ops_when_the_card_is_already_defined():
+    """The fallback must not fetch on the normal path."""
+    loader = (_COMPONENT / "frontend" / "protect-media-viewer-loader.js").read_text()
+    assert "customElements.get(TAG)" in loader
+    # The short-circuit has to precede the import, or every page load pays for
+    # a redundant fetch of a card it already has.
+    assert loader.index("customElements.get(TAG)") < loader.index("import(url)")
 
 
 def test_loader_has_retry_and_reporting_machinery():
