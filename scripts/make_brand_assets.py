@@ -1,4 +1,4 @@
-"""Generate HACS/HA brand assets for Protect Media Viewer.
+"""Generate HACS/HA brand assets for UniFi Protect Media Viewer.
 
 Produces a polished app-style icon and a horizontal logo lockup into
 custom_components/protect_media_viewer/brand/ (the HACS local-brand fallback
@@ -84,6 +84,16 @@ def _icon_mark(size: int) -> Image.Image:
     return base.resize((size, size), Image.LANCZOS)
 
 
+def _fit_font(text: str, max_width: int, size: int) -> ImageFont.FreeTypeFont:
+    """Largest bold face at or below `size` that renders `text` within max_width."""
+    while size > 8:
+        font = ImageFont.truetype(FONT_PATH, size)
+        if font.getbbox(text)[2] <= max_width:
+            return font
+        size -= 1
+    return ImageFont.truetype(FONT_PATH, 8)
+
+
 def _logo(width: int, height: int) -> Image.Image:
     """Horizontal lockup: icon mark + wordmark on transparent background."""
     S = SS
@@ -93,11 +103,12 @@ def _logo(width: int, height: int) -> Image.Image:
     img.alpha_composite(mark, (0, 0))
 
     d = ImageDraw.Draw(img)
-    font = ImageFont.truetype(FONT_PATH, int(height * S * 0.30))
-    sub_font = ImageFont.truetype(FONT_PATH, int(height * S * 0.18))
     tx = mark_size + int(height * S * 0.18)
-    d.text((tx, height * S * 0.22), "Protect", font=font, fill=BOTTOM)
-    d.text((tx, height * S * 0.52), "Media Viewer", font=sub_font, fill=TOP)
+    avail = width * S - tx - int(height * S * 0.10)
+    font = _fit_font("UniFi Protect", avail, int(height * S * 0.30))
+    sub_font = _fit_font("Media Viewer", avail, int(height * S * 0.18))
+    d.text((tx, height * S * 0.22), "UniFi Protect", font=font, fill=BOTTOM)
+    d.text((tx, height * S * 0.54), "Media Viewer", font=sub_font, fill=TOP)
 
     return img.resize((width, height), Image.LANCZOS)
 

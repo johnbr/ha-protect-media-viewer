@@ -1,4 +1,4 @@
-# Protect Media Viewer
+# UniFi Protect Media Viewer
 
 A Home Assistant custom integration — with a bundled dashboard card — for
 browsing UniFi Protect **smart-detection** event recordings quickly.
@@ -27,7 +27,7 @@ NVR independently and doesn't change anything about your existing setup.
 1. In HACS, open the **⋮** menu → **Custom repositories**, and add
    `https://github.com/johnbr/ha-protect-media-viewer` with category
    **Integration**.
-2. Search for **Protect Media Viewer**, download it, and restart Home Assistant.
+2. Search for **UniFi Protect Media Viewer**, download it, and restart Home Assistant.
 3. Go to **Settings → Devices & Services → Add Integration → Protect Media
    Viewer** and enter:
    - **Host** (and port, default 443) of your Protect console.

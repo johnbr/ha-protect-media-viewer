@@ -1,6 +1,6 @@
 {
   "domain": "protect_media_viewer",
-  "name": "Protect Media Viewer",
+  "name": "UniFi Protect Media Viewer",
   "codeowners": [
     "@johnbr"
   ],
