@@ -579,7 +579,7 @@ if (!customElements.get("protect-media-viewer-card")) {
   window.customCards = window.customCards || [];
   window.customCards.push({
     type: "protect-media-viewer-card",
-    name: "Protect Media Viewer",
+    name: "UniFi Protect Media Viewer",
     description: "Browse UniFi Protect smart-detection events with fast thumbnails and inline playback.",
     preview: false,
   });

@@ -1,5 +1,5 @@
 {
-  "name": "Protect Media Viewer",
+  "name": "UniFi Protect Media Viewer",
   "render_readme": true,
   "homeassistant": "2024.12.0"
 }
