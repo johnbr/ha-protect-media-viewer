@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.17...v0.2.0) (2026-09-02)
+
+
+### Features
+
+* name the integration "UniFi Protect Media Viewer" ([#9](https://github.com/johnbr/ha-protect-media-viewer/issues/9)) ([c4f7d80](https://github.com/johnbr/ha-protect-media-viewer/commit/c4f7d80911e4f51f0cec813ab39f426a1cf2b3e0))
+
 ## [0.1.17](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.16...v0.1.17) (2026-08-28)
 
 
