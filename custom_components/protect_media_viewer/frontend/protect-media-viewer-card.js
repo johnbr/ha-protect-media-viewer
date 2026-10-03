@@ -32,6 +32,17 @@ const SAVED_RANGES = [
 
 const ICON_BY_TYPE = Object.fromEntries(TYPES.map((t) => [t.key, t.icon]));
 
+// Recognition chips (backend recognition.py): at most this many per tile; the
+// tooltip and the player caption always list everything.
+const RECOG_MAX_CHIPS = 2;
+const RECOG_ICON = {
+  "face:known": "mdi:account-check",
+  "face:unknown": "mdi:account-question",
+  "face:unidentified": "mdi:account-question",
+  "plate:known": "mdi:car-search",
+  "plate:unknown": "mdi:card-text-outline",
+};
+
 // How many times to retry a thumbnail that fails to load before marking it broken.
 const THUMB_MAX_RETRIES = 5;
 
@@ -406,6 +417,22 @@ class ProtectMediaViewerCard extends HTMLElement {
         .tile .badges ha-icon { --mdc-icon-size: 15px; }
         .tile .when { white-space: nowrap; }
         .tile .cam { opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* Recognition chips: green = named in Protect, amber = recognised but
+           unnamed. Unidentified faces get no chip (they are most face events). */
+        .tile .recog {
+          /* right: clear of the two .marks icons (2 x 22px + gap, top-right) */
+          position: absolute; top: 4px; left: 4px; right: 56px;
+          display: flex; flex-wrap: wrap; gap: 3px; pointer-events: none;
+        }
+        .rchip {
+          display: inline-flex; align-items: center; gap: 3px; max-width: 100%;
+          padding: 1px 6px 1px 4px; border-radius: 10px; font-size: 0.7em; color: #fff;
+          background: rgba(0,0,0,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .rchip ha-icon { --mdc-icon-size: 13px; flex: none; }
+        .rchip.known { background: rgba(46,125,50,0.88); }
+        .rchip.unknown { background: rgba(200,120,0,0.88); }
+        .rchip .pct { opacity: 0.8; }
         .status { text-align: center; padding: 16px; color: var(--secondary-text-color); }
         .sentinel { height: 1px; }
         /* player modal */
@@ -628,6 +655,21 @@ class ProtectMediaViewerCard extends HTMLElement {
 
     tile.appendChild(img);
     tile.appendChild(overlay);
+
+    const recog = (ev.recognition || []).filter((r) => r.verdict !== "unidentified");
+    if (recog.length) {
+      const chips = document.createElement("div");
+      chips.className = "recog";
+      const shown = recog.slice(0, RECOG_MAX_CHIPS);
+      chips.innerHTML = shown
+        .map((r) => {
+          const icon = RECOG_ICON[`${r.kind}:${r.verdict}`] || "mdi:help";
+          const pct = r.confidence != null ? ` <span class="pct">${this._escape(String(r.confidence))}%</span>` : "";
+          return `<span class="rchip ${r.verdict}"><ha-icon icon="${icon}"></ha-icon>${this._escape(this._recogLabel(r))}${pct}</span>`;
+        })
+        .join("") + (recog.length > shown.length ? `<span class="rchip">+${recog.length - shown.length}</span>` : "");
+      tile.appendChild(chips);
+    }
     const marks = document.createElement("div");
     marks.className = "marks";
     tile.appendChild(marks);
@@ -642,7 +684,8 @@ class ProtectMediaViewerCard extends HTMLElement {
     marks.innerHTML =
       (ev.saved ? '<ha-icon class="saved" icon="mdi:bookmark" title="Saved"></ha-icon>' : "") +
       (ev.flagged ? '<ha-icon icon="mdi:flag" title="Flagged in Protect"></ha-icon>' : "");
-    tile.title = ev.saved && ev.saved.note ? ev.saved.note : "";
+    // Saved note first, then who/what Protect recognised.
+    tile.title = [ev.saved && ev.saved.note, this._recogSummary(ev)].filter(Boolean).join(" · ");
   }
 
   _onThumbError(tile, img, ev) {
@@ -672,9 +715,11 @@ class ProtectMediaViewerCard extends HTMLElement {
 
   _openPlayer(ev) {
     this._current = ev;
+    const summary = this._recogSummary(ev);
     this._caption.textContent =
       `${ev.camera_name || ""} · ${(ev.smart_detect_types || []).join(", ")} · ${this._fmtDateTime(ev.start)}` +
-      (ev.score != null ? ` · ${ev.score}%` : "");
+      (ev.score != null ? ` · ${ev.score}%` : "") +
+      (summary ? ` · ${summary}` : "");
     this._renderActions();
     this._video.src = ev.clip;
     this._modal.classList.add("open");
@@ -832,6 +877,23 @@ class ProtectMediaViewerCard extends HTMLElement {
 
   _setStatus(text) {
     if (this._statusEl) this._statusEl.textContent = text;
+  }
+
+  // "Johnny", "Unknown face", "Roadrunner · 1FSTSLA", "9UYB036".
+  _recogLabel(r) {
+    if (r.kind === "plate") {
+      if (r.name && r.plate) return `${r.name} · ${r.plate}`;
+      return r.name || r.plate || "Plate";
+    }
+    if (r.name) return r.name;
+    return r.verdict === "unknown" ? "Unknown face" : "Face unclear";
+  }
+
+  // Every recognition in the event, for the tooltip and player caption.
+  _recogSummary(ev) {
+    return (ev.recognition || [])
+      .map((r) => this._recogLabel(r) + (r.confidence != null ? ` (${r.confidence}%)` : ""))
+      .join(", ");
   }
 
   _escape(s) {

@@ -19,6 +19,8 @@ from uiprotect import ProtectApiClient
 from uiprotect.data import EventType, SmartDetectObjectType, create_from_unifi_dict
 from uiprotect.exceptions import ClientError, NotAuthorized
 
+from .recognition import recognitions
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -180,6 +182,9 @@ class ProtectClient:
             # Protect's own "flag" on the event (UFP 6+). Not a retention
             # guarantee; see saved.py.
             "flagged": bool(raw.get("isFavorite")),
+            # Face names / plates Protect matched, best first (see
+            # recognition.py). Empty for events with no face or plate.
+            "recognition": recognitions(ev),
         }
 
     async def get_event_record(self, event_id: str) -> dict[str, Any] | None:

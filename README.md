@@ -66,6 +66,22 @@ selector and time-range selector stay pinned at the top while the thumbnail grid
 scrolls and loads more results automatically. Click a thumbnail to play its clip
 inline.
 
+### Face and plate recognition
+
+When Protect recognises a face or reads a plate (UniFi Protect 6+ with face /
+license-plate recognition enabled), the tile shows it as a chip with Protect's
+match confidence:
+
+- **green**: a face or plate you've named in Protect, e.g. `Johnny 80%` or
+  `Roadrunner · 1FSTSLA 89%`;
+- **amber**: recognised but not named yet, e.g. `Unknown face 95%` or a plate
+  read like `9UYB036 88%`. An unnamed face is not necessarily a stranger. Name
+  the face in Protect and later matches turn green.
+
+Faces too blurry or angled to match ("face unclear") get no chip, because that
+is most face detections. They still appear, with every other match, in the
+tile's tooltip and the player caption.
+
 ## Saved clips
 
 Protect deletes recordings once they are older than the console's retention
