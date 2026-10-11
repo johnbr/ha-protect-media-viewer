@@ -16,7 +16,7 @@ from typing import Any
 
 import aiohttp
 from uiprotect import ProtectApiClient
-from uiprotect.data import EventType, SmartDetectObjectType
+from uiprotect.data import EventType, SmartDetectObjectType, create_from_unifi_dict
 from uiprotect.exceptions import ClientError, NotAuthorized
 
 _LOGGER = logging.getLogger(__name__)
@@ -140,15 +140,23 @@ class ProtectClient:
                     _LOGGER.warning("Unknown smart-detect type %r; ignoring", t)
             types = parsed or None
 
-        events = await self._api.get_events(
-            start=start,
-            end=end,
-            limit=limit,
-            offset=offset,
-            types=_SMART_EVENT_TYPES,
-            smart_detect_types=types,
-            sorting="desc",
-        )
+        query: dict[str, Any] = {
+            "start": start,
+            "end": end,
+            "limit": limit,
+            "offset": offset,
+            "types": _SMART_EVENT_TYPES,
+            "smart_detect_types": types,
+            "sorting": "desc",
+        }
+        # uiprotect 23 (HA 2026.10) dropped the parsed ``get_events``; it was
+        # always ``get_events_raw`` plus ``create_from_unifi_dict`` per row, so
+        # do that ourselves. Older releases keep the original call.
+        if (get_events := getattr(self._api, "get_events", None)) is not None:
+            events = await get_events(**query)
+        else:
+            raw = await self._api.get_events_raw(**query)
+            events = [create_from_unifi_dict(row, api=self._api) for row in raw]
 
         result: list[dict[str, Any]] = []
         for ev in events:
