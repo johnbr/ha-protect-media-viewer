@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.2.0...v0.2.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* list events on uiprotect 23, which removed get_events ([#11](https://github.com/johnbr/ha-protect-media-viewer/issues/11)) ([6dc8d1f](https://github.com/johnbr/ha-protect-media-viewer/commit/6dc8d1f7b82d9f02f75dcdab8d39f03edde9d912))
+
 ## [0.2.0](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.1.17...v0.2.0) (2026-09-02)
 
 
