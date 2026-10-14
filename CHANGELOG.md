@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.3.0...v0.4.0) (2026-10-14)
+
+
+### Features
+
+* show face names and plates with Protect's match confidence ([#18](https://github.com/johnbr/ha-protect-media-viewer/issues/18)) ([27226f9](https://github.com/johnbr/ha-protect-media-viewer/commit/27226f950fec4ce5f0fd6c8d28fe4585e49f4713))
+
 ## [0.3.0](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.2.1...v0.3.0) (2026-10-14)
 
 
