@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.2.1...v0.3.0) (2026-10-14)
+
+
+### Features
+
+* save clips so they outlive Protect's retention, and browse them ([#13](https://github.com/johnbr/ha-protect-media-viewer/issues/13)) ([0f8a964](https://github.com/johnbr/ha-protect-media-viewer/commit/0f8a9647f6b86d3e6da8e83cecd4da3838dd6bc9))
+
 ## [0.2.1](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.2.0...v0.2.1) (2026-10-11)
 
 
