@@ -10,7 +10,7 @@ import asyncio
 import logging
 import ssl
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -192,7 +192,34 @@ class ProtectClient:
         raw = await self._api.api_request(f"events/{event_id}", raise_exception=False)
         if not isinstance(raw, dict) or not raw.get("start"):
             return None
+        raw = await self._listed_row(raw) or raw
         return self._event_dict(create_from_unifi_dict(raw, api=self._api), raw)
+
+    async def _listed_row(self, raw: dict[str, Any]) -> dict[str, Any] | None:
+        """The same event as the events LIST returns it, or None.
+
+        ``events/{id}`` leaves the recognition ``group`` off every detection
+        crop, with or without ``withoutDescriptions=false``; only the list
+        attaches it (measured 2026-10-14, Protect 7.3.70). Without it a saved
+        clip would lose its plates and keep faces only as "unclear", so the
+        row is re-read over the event's own time span. Best-effort: any
+        failure falls back to the single row.
+        """
+        get_events_raw = getattr(self._api, "get_events_raw", None)
+        start_ms = raw.get("start")
+        if get_events_raw is None or not isinstance(start_ms, (int, float)):
+            return None
+        end_ms = raw.get("end") if isinstance(raw.get("end"), (int, float)) else start_ms
+        try:
+            rows = await get_events_raw(
+                start=datetime.fromtimestamp(start_ms / 1000 - 1, UTC),
+                end=datetime.fromtimestamp(end_ms / 1000 + 1, UTC),
+                limit=100,
+            )
+        except Exception as err:  # the single row is still usable
+            _LOGGER.debug("Could not re-read event %s from the events list: %s", raw.get("id"), err)
+            return None
+        return next((row for row in rows or [] if row.get("id") == raw.get("id")), None)
 
     async def set_flagged(self, event_id: str, flagged: bool) -> bool:
         """Set or clear Protect's flag (``isFavorite``) on an event.
