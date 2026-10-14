@@ -3,7 +3,9 @@
  *
  * A no-build custom card: browse UniFi Protect smart-detection events as a fast,
  * infinite-scrolling thumbnail grid with detection-type filter chips, and play
- * clips inline. Talks to the protect_media_viewer integration's HTTP API.
+ * clips inline. Clips can be saved (kept outside Protect, so they outlive the
+ * NVR's retention) and browsed in a second "Saved" mode. Talks to the
+ * protect_media_viewer integration's HTTP API.
  */
 
 const TYPES = [
@@ -19,6 +21,13 @@ const TIME_RANGES = [
   { label: "24h", hours: 24 },
   { label: "7d", hours: 168 },
   { label: "30d", hours: 720 },
+];
+
+// Saved mode looks back further: saved clips are old by definition.
+const SAVED_RANGES = [
+  { label: "30d", days: 30 },
+  { label: "1y", days: 365 },
+  { label: "All", days: 0 },
 ];
 
 const ICON_BY_TYPE = Object.fromEntries(TYPES.map((t) => [t.key, t.icon]));
@@ -45,12 +54,21 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._onKey = null;
     this._watching = false;
     this._cameras = [];
+    this._mode = "detections";
+    this._days = 0;
+    this._query = "";
+    this._saving = null; // {available, reason, can_remove, count} from the API
+    this._tiles = new Map(); // event id -> tile, so a save/remove can re-badge it
+    this._current = null; // the event open in the player
+    this._gen = 0; // bumped by _reset(); responses from an older query are dropped
   }
 
   setConfig(config) {
     this._config = config || {};
     this._hours = this._config.default_hours || 24;
     this._selectedTypes = new Set(this._config.default_types || []);
+    this._mode =
+      this._config.default_mode === "saved" && this._config.show_saved !== false ? "saved" : "detections";
     if (this._built) {
       // Rebuild controls to reflect new config defaults.
       this._built = false;
@@ -156,6 +174,15 @@ class ProtectMediaViewerCard extends HTMLElement {
     return this._hass.callApi("GET", path);
   }
 
+  _savedPath(id) {
+    const ep = this._entryParam();
+    return `protect_media_viewer/saved/${encodeURIComponent(id)}${ep ? "?" + ep : ""}`;
+  }
+
+  _isSavedMode() {
+    return this._mode === "saved";
+  }
+
   _pageSize() {
     return this._config.page_size || 60;
   }
@@ -171,7 +198,10 @@ class ProtectMediaViewerCard extends HTMLElement {
   }
 
   _reset() {
+    this._gen += 1;
+    this._loading = false; // an in-flight page belongs to the old query now
     this._events = [];
+    this._tiles.clear();
     this._offset = 0;
     this._hasMore = true;
     this._loadRetries = 0;
@@ -194,21 +224,30 @@ class ProtectMediaViewerCard extends HTMLElement {
 
   async _loadMore() {
     if (this._loading || !this._hasMore) return;
+    const gen = this._gen;
+    const saved = this._isSavedMode();
     this._loading = true;
     this._setStatus(this._events.length ? "Loading more…" : "Loading…");
 
     const params = [];
     const ep = this._entryParam();
     if (ep) params.push(ep);
-    params.push(`hours=${this._hours}`);
+    if (saved) {
+      params.push(`days=${this._days}`);
+      if (this._query) params.push(`q=${encodeURIComponent(this._query)}`);
+    } else {
+      params.push(`hours=${this._hours}`);
+    }
     params.push(`limit=${this._pageSize()}`);
     params.push(`offset=${this._offset}`);
     if (this._selectedTypes.size) params.push(`types=${[...this._selectedTypes].join(",")}`);
     if (this._camera) params.push(`camera=${encodeURIComponent(this._camera)}`);
 
     try {
-      const res = await this._api(`protect_media_viewer/events?${params.join("&")}`);
+      const res = await this._api(`protect_media_viewer/${saved ? "saved" : "events"}?${params.join("&")}`);
+      if (gen !== this._gen) return; // filters changed while this page was in flight
       this._loadRetries = 0;
+      if (res.saving) this._saving = res.saving;
       const events = res.events || [];
       this._offset += res.limit || this._pageSize();
       this._hasMore = !!res.has_more;
@@ -216,12 +255,18 @@ class ProtectMediaViewerCard extends HTMLElement {
       this._events.push(...events);
 
       if (!this._events.length && !this._hasMore) {
-        this._setStatus("No detections found for these filters.");
+        this._setStatus(
+          saved
+            ? this._saving && this._saving.available === false
+              ? `Saved clips unavailable: ${this._saving.reason}`
+              : "No saved clips match these filters."
+            : "No detections found for these filters."
+        );
       } else if (!this._hasMore) {
-        this._setStatus(`${this._events.length} detections`);
+        this._setStatus(this._countText(this._events.length, saved));
       } else {
         // More available — show a running count and keep paging if needed.
-        this._setStatus(`${this._events.length} detections — scroll for more…`);
+        this._setStatus(`${this._countText(this._events.length, saved)} — scroll for more…`);
         // If a camera filter dropped the whole page, keep paging automatically.
         if (!events.length) {
           this._loading = false;
@@ -235,6 +280,7 @@ class ProtectMediaViewerCard extends HTMLElement {
         return;
       }
     } catch (err) {
+      if (gen !== this._gen) return;
       console.error("protect-media-viewer: events query failed", err);
       // Transient failures are normal on mobile (network handoff, page loaded
       // while HA is still booting so the API 400s until the entry is ready) —
@@ -245,7 +291,7 @@ class ProtectMediaViewerCard extends HTMLElement {
         const base = this._config.retry_base_ms || 2000;
         const delay = Math.min(30000, base * 2 ** (this._loadRetries - 1));
         setTimeout(() => {
-          if (!this.isConnected) return;
+          if (!this.isConnected || gen !== this._gen) return;
           if (!this._cameras.length) this._loadCameras();
           this._loadMore();
         }, delay);
@@ -254,7 +300,7 @@ class ProtectMediaViewerCard extends HTMLElement {
         this._hasMore = false;
       }
     } finally {
-      this._loading = false;
+      if (gen === this._gen) this._loading = false;
     }
   }
 
@@ -297,6 +343,21 @@ class ProtectMediaViewerCard extends HTMLElement {
           border: 1px solid var(--divider-color);
         }
         .spacer { flex: 1; }
+        .modes { display: inline-flex; border-radius: 16px; overflow: hidden;
+          border: 1px solid var(--divider-color); }
+        .modes button {
+          border: none; padding: 5px 12px; font-size: 0.85em; cursor: pointer;
+          background: var(--secondary-background-color); color: var(--primary-text-color);
+        }
+        .modes button[aria-pressed="true"] {
+          background: var(--primary-color); color: var(--text-primary-color, #fff);
+        }
+        input.search {
+          padding: 5px 8px; border-radius: 8px; font-size: 0.85em; min-width: 0; width: 11em;
+          background: var(--secondary-background-color); color: var(--primary-text-color);
+          border: 1px solid var(--divider-color);
+        }
+        .hidden { display: none !important; }
         /* The header + toolbar stay put; only this area scrolls. */
         .scroll {
           max-height: ${scrollHeight};
@@ -332,6 +393,16 @@ class ProtectMediaViewerCard extends HTMLElement {
           display: flex; align-items: center; justify-content: space-between; gap: 4px;
         }
         .tile .badges { display: flex; gap: 2px; }
+        /* Saved / flagged-in-Protect marks, top-right. */
+        .tile .marks {
+          position: absolute; top: 4px; right: 4px; display: flex; gap: 3px;
+          pointer-events: none;
+        }
+        .tile .marks ha-icon {
+          --mdc-icon-size: 16px; color: #fff; background: rgba(0,0,0,0.6);
+          border-radius: 50%; padding: 3px;
+        }
+        .tile .marks .saved { background: rgba(3,169,244,0.9); }
         .tile .badges ha-icon { --mdc-icon-size: 15px; }
         .tile .when { white-space: nowrap; }
         .tile .cam { opacity: 0.85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -346,6 +417,26 @@ class ProtectMediaViewerCard extends HTMLElement {
         .modal .box { position: relative; max-width: 92vw; max-height: 88vh; }
         .modal video { max-width: 92vw; max-height: 80vh; border-radius: 8px; background: #000; }
         .modal .caption { color: #ddd; font-size: 0.85em; padding-top: 8px; text-align: center; }
+        .modal .actions {
+          display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center;
+          padding-top: 10px; color: #ddd; font-size: 0.85em;
+        }
+        .modal .actions input {
+          padding: 6px 8px; border-radius: 8px; border: 1px solid #666; min-width: 0;
+          width: min(22em, 60vw); background: #222; color: #eee; font-size: 0.95em;
+        }
+        .modal .btn {
+          display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px;
+          border-radius: 16px; border: none; cursor: pointer; font-size: 0.95em;
+          background: var(--primary-color); color: #fff; text-decoration: none;
+        }
+        .modal .btn ha-icon { --mdc-icon-size: 16px; }
+        .modal .btn.secondary { background: #444; }
+        .modal .btn.danger { background: var(--error-color, #db4437); }
+        .modal .btn[disabled] { opacity: 0.6; cursor: default; }
+        .modal .saved-label { color: #8fd3ff; }
+        .modal .note { font-style: italic; color: #eee; }
+        .modal .msg { width: 100%; text-align: center; color: #ffb4a8; }
         .modal .close {
           position: absolute; top: -14px; right: -14px; width: 34px; height: 34px;
           border-radius: 50%; background: var(--primary-color); color: #fff;
@@ -355,8 +446,12 @@ class ProtectMediaViewerCard extends HTMLElement {
       <ha-card>
         <div class="header"></div>
         <div class="toolbar">
+          <div class="modes">
+            <button data-mode="detections">Detections</button><button data-mode="saved">Saved</button>
+          </div>
           <div class="chips"></div>
           <div class="spacer"></div>
+          <input class="search" type="search" placeholder="Search notes" aria-label="Search saved clips">
           <select class="camera"><option value="">All cameras</option></select>
           <select class="time"></select>
         </div>
@@ -371,6 +466,7 @@ class ProtectMediaViewerCard extends HTMLElement {
           <button class="close" title="Close">×</button>
           <video controls autoplay playsinline></video>
           <div class="caption"></div>
+          <div class="actions"></div>
         </div>
       </div>
     `;
@@ -383,20 +479,42 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._modal = this.shadowRoot.querySelector(".modal");
     this._video = this.shadowRoot.querySelector(".modal video");
     this._caption = this.shadowRoot.querySelector(".modal .caption");
+    this._actions = this.shadowRoot.querySelector(".modal .actions");
+    this._modesEl = this.shadowRoot.querySelector(".modes");
+    this._searchEl = this.shadowRoot.querySelector("input.search");
 
     this.shadowRoot.querySelector(".header").textContent =
       this._config.title || "Protect Smart Detections";
 
     this._renderChips();
-    this._renderTimeOptions();
+    this._renderModes();
 
     this._cameraSel.addEventListener("change", () => {
       this._camera = this._cameraSel.value;
       this._reset();
     });
     this._timeSel.addEventListener("change", () => {
-      this._hours = Number(this._timeSel.value);
+      if (this._isSavedMode()) this._days = Number(this._timeSel.value);
+      else this._hours = Number(this._timeSel.value);
       this._reset();
+    });
+    for (const btn of this._modesEl.querySelectorAll("button")) {
+      btn.addEventListener("click", () => {
+        if (btn.dataset.mode === this._mode) return;
+        this._mode = btn.dataset.mode;
+        this._renderModes();
+        this._reset();
+      });
+    }
+    // Debounced: every keystroke would otherwise be a request.
+    this._searchEl.addEventListener("input", () => {
+      clearTimeout(this._searchTimer);
+      this._searchTimer = setTimeout(() => {
+        const q = this._searchEl.value.trim();
+        if (q === this._query) return;
+        this._query = q;
+        this._reset();
+      }, 300);
     });
 
     // Player modal close handlers. These live on shadow-DOM nodes, so they go
@@ -441,13 +559,29 @@ class ProtectMediaViewerCard extends HTMLElement {
     }
   }
 
+  // Mode toggle, plus the controls that differ between the two modes.
+  _renderModes() {
+    const saved = this._isSavedMode();
+    this._modesEl.classList.toggle("hidden", this._config.show_saved === false);
+    for (const btn of this._modesEl.querySelectorAll("button")) {
+      btn.setAttribute("aria-pressed", btn.dataset.mode === this._mode ? "true" : "false");
+    }
+    this._searchEl.classList.toggle("hidden", !saved);
+    this._renderTimeOptions();
+  }
+
   _renderTimeOptions() {
     this._timeSel.innerHTML = "";
-    for (const r of TIME_RANGES) {
+    const saved = this._isSavedMode();
+    const ranges = saved
+      ? SAVED_RANGES.map((r) => ({ label: r.label, value: r.days }))
+      : TIME_RANGES.map((r) => ({ label: r.label, value: r.hours }));
+    const current = saved ? this._days : this._hours;
+    for (const r of ranges) {
       const opt = document.createElement("option");
-      opt.value = String(r.hours);
+      opt.value = String(r.value);
       opt.textContent = r.label;
-      if (r.hours === this._hours) opt.selected = true;
+      if (r.value === current) opt.selected = true;
       this._timeSel.appendChild(opt);
     }
   }
@@ -489,13 +623,26 @@ class ProtectMediaViewerCard extends HTMLElement {
       .join("");
     overlay.innerHTML =
       `<span class="cam">${this._escape(ev.camera_name || "")}</span>` +
-      `<span class="when">${this._fmtTime(ev.start)}</span>` +
+      `<span class="when">${this._fmtTime(ev.start, this._isSavedMode())}</span>` +
       `<span class="badges">${badges}</span>`;
 
     tile.appendChild(img);
     tile.appendChild(overlay);
+    const marks = document.createElement("div");
+    marks.className = "marks";
+    tile.appendChild(marks);
+    this._renderMarks(tile, ev);
     tile.addEventListener("click", () => this._openPlayer(ev));
+    this._tiles.set(ev.id, tile);
     this._grid.appendChild(tile);
+  }
+
+  _renderMarks(tile, ev) {
+    const marks = tile.querySelector(".marks");
+    marks.innerHTML =
+      (ev.saved ? '<ha-icon class="saved" icon="mdi:bookmark" title="Saved"></ha-icon>' : "") +
+      (ev.flagged ? '<ha-icon icon="mdi:flag" title="Flagged in Protect"></ha-icon>' : "");
+    tile.title = ev.saved && ev.saved.note ? ev.saved.note : "";
   }
 
   _onThumbError(tile, img, ev) {
@@ -524,18 +671,152 @@ class ProtectMediaViewerCard extends HTMLElement {
   }
 
   _openPlayer(ev) {
-    const types = (ev.smart_detect_types || []).join(", ");
+    this._current = ev;
     this._caption.textContent =
-      `${ev.camera_name || ""} · ${types} · ${this._fmtDateTime(ev.start)}` +
+      `${ev.camera_name || ""} · ${(ev.smart_detect_types || []).join(", ")} · ${this._fmtDateTime(ev.start)}` +
       (ev.score != null ? ` · ${ev.score}%` : "");
+    this._renderActions();
     this._video.src = ev.clip;
     this._modal.classList.add("open");
     const playing = this._video.play();
     if (playing && typeof playing.catch === "function") playing.catch(() => {});
   }
 
+  // ---- save / download / remove (player) ----------------------------------
+
+  _renderActions(message = "") {
+    const ev = this._current;
+    const a = this._actions;
+    a.innerHTML = "";
+    if (!ev) return;
+    const saving = this._saving || {};
+
+    if (ev.saved) {
+      const s = ev.saved;
+      const by = s.saved_by ? ` by ${this._escape(s.saved_by)}` : "";
+      const label = document.createElement("span");
+      label.className = "saved-label";
+      label.innerHTML = `<ha-icon icon="mdi:bookmark-check"></ha-icon> Saved${by} ${this._escape(this._fmtDate(s.saved_at))}`;
+      a.appendChild(label);
+      if (s.note) {
+        const note = document.createElement("span");
+        note.className = "note";
+        note.textContent = `“${s.note}”`;
+        a.appendChild(note);
+      }
+      if (ev.download) {
+        const dl = document.createElement("a");
+        dl.className = "btn secondary download";
+        dl.href = ev.download;
+        dl.setAttribute("download", "");
+        dl.innerHTML = '<ha-icon icon="mdi:download"></ha-icon> Download';
+        a.appendChild(dl);
+      }
+      a.appendChild(this._button("Edit note", "mdi:pencil", "secondary edit", () => this._editNote(ev)));
+      if (saving.can_remove) {
+        a.appendChild(this._button("Remove", "mdi:delete", "danger remove", () => this._remove(ev)));
+      }
+    } else if (this._config.allow_save !== false) {
+      if (saving.available === false) {
+        const off = document.createElement("span");
+        off.className = "msg";
+        off.textContent = `Saving unavailable: ${saving.reason || "unknown reason"}`;
+        a.appendChild(off);
+      } else {
+        const input = document.createElement("input");
+        input.className = "note-input";
+        input.placeholder = "Note (optional)";
+        input.maxLength = 500;
+        const btn = this._button("Save", "mdi:bookmark-plus", "save", () => this._save(ev, input, btn));
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") btn.click();
+        });
+        a.appendChild(input);
+        a.appendChild(btn);
+      }
+    }
+    if (message) {
+      const msg = document.createElement("span");
+      msg.className = "msg";
+      msg.textContent = message;
+      a.appendChild(msg);
+    }
+  }
+
+  _button(text, icon, cls, onClick) {
+    const b = document.createElement("button");
+    b.className = `btn ${cls}`;
+    b.innerHTML = `<ha-icon icon="${icon}"></ha-icon> ${text}`;
+    b.addEventListener("click", onClick);
+    return b;
+  }
+
+  async _save(ev, input, btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<ha-icon icon="mdi:timer-sand"></ha-icon> Saving…';
+    try {
+      const res = await this._hass.callApi("POST", this._savedPath(ev.id), { note: input.value || "" });
+      this._applySaved(ev, res.event);
+      if (this._saving && res.created) this._saving.count = (this._saving.count || 0) + 1;
+      if (this._current === ev) this._renderActions();
+    } catch (err) {
+      if (this._current === ev) this._renderActions(this._errText(err));
+    }
+  }
+
+  async _editNote(ev) {
+    const note = window.prompt("Note for this saved clip", (ev.saved && ev.saved.note) || "");
+    if (note === null) return;
+    try {
+      const res = await this._hass.callApi("PATCH", this._savedPath(ev.id), { note });
+      this._applySaved(ev, res.event);
+      if (this._current === ev) this._renderActions();
+    } catch (err) {
+      if (this._current === ev) this._renderActions(this._errText(err));
+    }
+  }
+
+  async _remove(ev) {
+    if (!window.confirm("Remove this saved clip? It moves to the trash and is deleted later.")) return;
+    try {
+      await this._hass.callApi("DELETE", this._savedPath(ev.id));
+    } catch (err) {
+      if (this._current === ev) this._renderActions(this._errText(err));
+      return;
+    }
+    ev.saved = null;
+    ev.download = undefined;
+    if (this._saving && this._saving.count) this._saving.count -= 1;
+    const tile = this._tiles.get(ev.id);
+    if (this._isSavedMode()) {
+      // Gone from this list, and its saved-clip URL no longer plays.
+      if (tile) tile.remove();
+      this._tiles.delete(ev.id);
+      this._events = this._events.filter((e) => e !== ev);
+      this._setStatus(this._countText(this._events.length, true));
+      if (this._current === ev) this._closePlayer();
+      return;
+    }
+    if (tile) this._renderMarks(tile, ev);
+    if (this._current === ev) this._renderActions();
+  }
+
+  // Fold a save/edit response into the event object the grid and player share.
+  _applySaved(ev, saved) {
+    ev.saved = saved.saved;
+    ev.download = saved.download;
+    ev.flagged = saved.flagged;
+    const tile = this._tiles.get(ev.id);
+    if (tile) this._renderMarks(tile, ev);
+  }
+
+  _errText(err) {
+    return (err && err.body && err.body.message) || (err && err.message) || (err && err.error) || "Request failed";
+  }
+
   _closePlayer() {
     if (!this._modal.classList.contains("open")) return;
+    this._current = null;
     this._modal.classList.remove("open");
     this._video.pause();
     this._video.removeAttribute("src");
@@ -543,6 +824,11 @@ class ProtectMediaViewerCard extends HTMLElement {
   }
 
   // ---- small utils --------------------------------------------------------
+
+  _countText(n, saved) {
+    const noun = saved ? "saved clip" : "detection";
+    return `${n} ${noun}${n === 1 ? "" : "s"}`;
+  }
 
   _setStatus(text) {
     if (this._statusEl) this._statusEl.textContent = text;
@@ -554,13 +840,25 @@ class ProtectMediaViewerCard extends HTMLElement {
     return d.innerHTML;
   }
 
-  _fmtTime(iso) {
+  _fmtTime(iso, withDate = false) {
     if (!iso) return "";
     const d = new Date(iso);
     const now = new Date();
     const sameDay = d.toDateString() === now.toDateString();
     const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return sameDay ? t : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${t}`;
+    if (sameDay && !withDate) return t;
+    const date = d.toLocaleDateString(
+      [],
+      d.getFullYear() === now.getFullYear()
+        ? { month: "short", day: "numeric" }
+        : { year: "numeric", month: "short", day: "numeric" }
+    );
+    return `${date} ${t}`;
+  }
+
+  _fmtDate(iso) {
+    if (!iso) return "";
+    return new Date(iso).toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
   }
 
   _fmtDateTime(iso) {

@@ -181,7 +181,7 @@ async function main() {
   console.error = realError;
   assert.strictEqual(grid3.children.length, 1, "flaky API self-healed after retries");
   assert.strictEqual(failuresLeft, 0, "both injected failures were consumed");
-  assert.match(el3.shadowRoot.querySelector(".status").textContent, /1 detections/, "final status is healthy");
+  assert.match(el3.shadowRoot.querySelector(".status").textContent, /^1 detection$/, "final status is healthy");
 
   // --- Accordion scenario: a `conditional` fold DETACHES the card. ---
   // hui-conditional-base.setVisibility() removes its child from the DOM when
@@ -247,6 +247,142 @@ async function main() {
     assert.notStrictEqual(ioLog.at(-1), io, `cycle ${cycle}: a fresh observer is watching`);
     assert.strictEqual(ioLog.at(-1).targets, 1, `cycle ${cycle}: sentinel observed again`);
   }
+
+  // --- Saved clips: badges, Save from the player, Saved mode, Remove. ---
+  const calls = [];
+  const savedStore = new Map(); // id -> saved event
+  const savedInfo = (note) => ({ saved_at: new Date().toISOString(), saved_by: "John", note, size: 1, protect_flagged: true });
+  let saving = { available: true, reason: null, count: 0, can_remove: true };
+  const savedHass = {
+    async callApi(method, path, data) {
+      calls.push({ method, path, data });
+      if (path.startsWith("protect_media_viewer/cameras")) return { cameras: [] };
+      if (method === "GET" && path.startsWith("protect_media_viewer/events")) {
+        const flagged = { ...makeEvent("s2", ["person"], "roof"), flagged: true };
+        const already = { ...makeEvent("s3", ["vehicle"], "roof"), saved: savedInfo("old"), download: "/dl/s3" };
+        return { events: [makeEvent("s1", ["person"], "roof"), flagged, already], count: 3, offset: 0, limit: 60, has_more: false, saving };
+      }
+      if (method === "GET" && path.startsWith("protect_media_viewer/saved")) {
+        const events = [...savedStore.values()];
+        return { events, count: events.length, total: events.length, offset: 0, limit: 60, has_more: false, saving };
+      }
+      const m = path.match(/^protect_media_viewer\/saved\/([^?]+)/);
+      if (m && method === "POST") {
+        const ev = { ...makeEvent(m[1], ["person"], "roof"), flagged: true, saved: savedInfo(data.note),
+          clip: `/api/protect_media_viewer/saved-clip/${m[1]}?t=z`, download: `/api/protect_media_viewer/saved-clip/${m[1]}?t=z&download=1` };
+        savedStore.set(m[1], ev);
+        return { created: true, event: ev };
+      }
+      if (m && method === "DELETE") {
+        savedStore.delete(m[1]);
+        return null;
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    },
+  };
+  window.confirm = () => true;
+
+  const el5 = document.createElement("protect-media-viewer-card");
+  el5.setConfig({ title: "Saved" });
+  document.body.appendChild(el5);
+  el5.hass = savedHass;
+  await tick();
+  await tick();
+  const root5 = el5.shadowRoot;
+  const grid5 = root5.querySelector(".grid");
+  assert.strictEqual(grid5.children.length, 3, "saved test: 3 detections");
+  assert.ok(!grid5.children[0].querySelector(".marks").innerHTML.includes("bookmark"), "unsaved tile has no bookmark");
+  assert.match(grid5.children[1].querySelector(".marks").innerHTML, /mdi:flag/, "Protect-flagged tile shows the flag");
+  assert.match(grid5.children[2].querySelector(".marks").innerHTML, /mdi:bookmark/, "already-saved tile shows the bookmark");
+  assert.ok(root5.querySelector("input.search").classList.contains("hidden"), "search box hidden in detections mode");
+
+  // Save from the player, with a note.
+  grid5.children[0].click();
+  const actions = root5.querySelector(".modal .actions");
+  actions.querySelector("input.note-input").value = "package thief";
+  actions.querySelector("button.save").click();
+  await tick();
+  await tick();
+  const post = calls.find((c) => c.method === "POST");
+  assert.ok(post && post.path.startsWith("protect_media_viewer/saved/s1"), "POSTed the save");
+  assert.strictEqual(post.data.note, "package thief", "note sent with the save");
+  assert.match(grid5.children[0].querySelector(".marks").innerHTML, /mdi:bookmark/, "tile re-badged after save");
+  assert.match(actions.textContent, /Saved by John/, "player shows the saved state");
+  assert.match(actions.textContent, /package thief/, "player shows the note");
+  assert.match(actions.querySelector("a.download").getAttribute("href"), /download=1/, "download link offered");
+  assert.ok(actions.querySelector("button.remove"), "admin gets Remove");
+  root5.querySelector(".modal .close").click();
+
+  // Already-saved event: no Save button, Download straight away.
+  grid5.children[2].click();
+  assert.ok(!actions.querySelector("button.save"), "no Save on a saved clip");
+  assert.strictEqual(actions.querySelector("a.download").getAttribute("href"), "/dl/s3");
+  root5.querySelector(".modal .close").click();
+
+  // Saved mode: different endpoint, ranges and the search box.
+  calls.length = 0;
+  root5.querySelector('.modes button[data-mode="saved"]').click();
+  await tick();
+  await tick();
+  const listCall = calls.find((c) => c.path.startsWith("protect_media_viewer/saved?"));
+  assert.ok(listCall && listCall.path.includes("days=0"), "saved mode lists with days=0 (All)");
+  assert.deepStrictEqual(
+    [...root5.querySelectorAll("select.time option")].map((o) => o.textContent), ["30d", "1y", "All"], "saved ranges"
+  );
+  assert.ok(!root5.querySelector("input.search").classList.contains("hidden"), "search box shown in saved mode");
+  assert.strictEqual(grid5.children.length, 1, "one saved clip listed");
+  assert.match(root5.querySelector(".status").textContent, /^1 saved clip$/, "singular count");
+
+  calls.length = 0;
+  const search = root5.querySelector("input.search");
+  search.value = "thief";
+  search.dispatchEvent(new window.Event("input"));
+  await new Promise((r) => setTimeout(r, 350));
+  await tick();
+  assert.ok(calls.some((c) => c.path.includes("q=thief")), "search re-queries with q=");
+
+  // Remove from Saved mode: DELETE, tile gone, player closed.
+  grid5.children[0].click();
+  actions.querySelector("button.remove").click();
+  await tick();
+  await tick();
+  assert.ok(calls.some((c) => c.method === "DELETE" && c.path.startsWith("protect_media_viewer/saved/s1")), "DELETE sent");
+  assert.strictEqual(grid5.children.length, 0, "removed clip leaves the saved list");
+  assert.ok(!root5.querySelector(".modal").classList.contains("open"), "player closed after remove");
+
+  // Non-admin: no Remove. Unavailable store: no Save, the reason instead.
+  saving = { available: true, reason: null, count: 1, can_remove: false };
+  root5.querySelector('.modes button[data-mode="detections"]').click();
+  await tick();
+  await tick();
+  grid5.children[2].click();
+  assert.ok(!actions.querySelector("button.remove"), "non-admin gets no Remove");
+  root5.querySelector(".modal .close").click();
+
+  saving = { available: false, reason: "the saved-clips directory has no marker file", count: 0, can_remove: true };
+  root5.querySelector('.modes button[data-mode="saved"]').click();
+  await tick();
+  await tick();
+  root5.querySelector('.modes button[data-mode="detections"]').click();
+  await tick();
+  await tick();
+  grid5.children[0].click();
+  assert.ok(!actions.querySelector("button.save"), "no Save while the store is unavailable");
+  assert.match(actions.textContent, /Saving unavailable: .*marker/, "says why saving is off");
+  root5.querySelector(".modal .close").click();
+
+  // show_saved: false hides the toggle; allow_save: false hides Save.
+  const el6 = document.createElement("protect-media-viewer-card");
+  el6.setConfig({ show_saved: false, allow_save: false, default_mode: "saved" });
+  saving = { available: true, reason: null, count: 0, can_remove: true };
+  document.body.appendChild(el6);
+  el6.hass = savedHass;
+  await tick();
+  await tick();
+  assert.ok(el6.shadowRoot.querySelector(".modes").classList.contains("hidden"), "show_saved:false hides the toggle");
+  assert.strictEqual(el6.shadowRoot.querySelector(".grid").children.length, 3, "default_mode ignored without show_saved");
+  el6.shadowRoot.querySelector(".grid").children[0].click();
+  assert.ok(!el6.shadowRoot.querySelector(".modal .actions button.save"), "allow_save:false hides Save");
 
   console.log("Card smoke test: SUCCESS (all assertions passed)");
 }
