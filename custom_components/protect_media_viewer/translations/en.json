@@ -21,5 +21,31 @@
     "abort": {
       "already_configured": "This UniFi Protect NVR is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Saved clips",
+        "description": "Saved clips are full-resolution copies of Protect events, kept outside the NVR so they outlive its retention. Leave the folder empty to keep them under the Home Assistant config folder (they are then included in Home Assistant backups). A folder you enter must already exist; a marker file is placed in it, and saving pauses whenever the folder is found without it (for example, a disk that is not mounted).",
+        "data": {
+          "saved_dir": "Saved clips folder",
+          "save_pre_roll": "Seconds to keep before the detection",
+          "save_post_roll": "Seconds to keep after the detection",
+          "save_min_free_gb": "Free space to keep in reserve (GB)",
+          "trash_days": "Days to keep removed clips before deleting them",
+          "flag_in_protect": "Also flag saved events in Protect",
+          "remove_admin_only": "Only administrators can remove saved clips"
+        },
+        "data_description": {
+          "saved_dir": "An absolute path as seen by Home Assistant, for example /media/protect_saved.",
+          "flag_in_protect": "Marks the event with Protect's flag so it is easy to find in the Protect app. The flag alone does not stop Protect deleting the footage."
+        }
+      }
+    },
+    "error": {
+      "dir_not_absolute": "Enter an absolute path (starting with /).",
+      "dir_missing": "That folder does not exist. Create it (or mount the disk) first.",
+      "dir_not_writable": "Home Assistant cannot write to that folder."
+    }
   }
 }

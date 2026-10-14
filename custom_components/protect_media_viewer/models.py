@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .cache import ClipCache, ThumbnailCache
 from .protect import ProtectClient
+from .saved import SavedStore
 
 
 @dataclass(slots=True)
@@ -20,3 +21,5 @@ class RuntimeData:
     # stay valid and browser-cacheable across restarts.
     url_secret: str = ""
     ws_unsub: object | None = None
+    # Clips kept beyond the NVR's retention (saved.py).
+    saved: SavedStore | None = None

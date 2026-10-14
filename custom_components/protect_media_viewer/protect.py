@@ -149,31 +149,65 @@ class ProtectClient:
             "smart_detect_types": types,
             "sorting": "desc",
         }
-        # uiprotect 23 (HA 2026.10) dropped the parsed ``get_events``; it was
-        # always ``get_events_raw`` plus ``create_from_unifi_dict`` per row, so
-        # do that ourselves. Older releases keep the original call.
-        if (get_events := getattr(self._api, "get_events", None)) is not None:
-            events = await get_events(**query)
+        # The parsed ``get_events`` was always ``get_events_raw`` plus
+        # ``create_from_unifi_dict`` per row, and uiprotect 23 (HA 2026.10)
+        # dropped it, so do that ourselves. Parsing the raw rows here also keeps
+        # fields the Event model doesn't carry (``isFavorite``). Releases old
+        # enough to lack ``get_events_raw`` keep the original call.
+        rows: list[tuple[Any, dict[str, Any]]]
+        if (get_events_raw := getattr(self._api, "get_events_raw", None)) is not None:
+            raw = await get_events_raw(**query)
+            rows = [(create_from_unifi_dict(row, api=self._api), row) for row in raw]
         else:
-            raw = await self._api.get_events_raw(**query)
-            events = [create_from_unifi_dict(row, api=self._api) for row in raw]
+            rows = [(ev, {}) for ev in await self._api.get_events(**query)]
 
-        result: list[dict[str, Any]] = []
-        for ev in events:
-            if camera_id and ev.camera_id != camera_id:
-                continue
-            result.append(
-                {
-                    "id": ev.id,
-                    "camera_id": ev.camera_id,
-                    "camera_name": self.camera_name(ev.camera_id),
-                    "start": ev.start.isoformat() if ev.start else None,
-                    "end": ev.end.isoformat() if ev.end else None,
-                    "score": ev.score,
-                    "smart_detect_types": [t.value for t in ev.smart_detect_types],
-                }
-            )
-        return result
+        return [
+            self._event_dict(ev, row)
+            for ev, row in rows
+            if not camera_id or ev.camera_id == camera_id
+        ]
+
+    def _event_dict(self, ev: Any, raw: dict[str, Any]) -> dict[str, Any]:
+        """One event as the plain dict the API layer (and saved sidecars) use."""
+        return {
+            "id": ev.id,
+            "camera_id": ev.camera_id,
+            "camera_name": self.camera_name(ev.camera_id),
+            "start": ev.start.isoformat() if ev.start else None,
+            "end": ev.end.isoformat() if ev.end else None,
+            "score": ev.score,
+            "smart_detect_types": [t.value for t in ev.smart_detect_types],
+            # Protect's own "flag" on the event (UFP 6+). Not a retention
+            # guarantee; see saved.py.
+            "flagged": bool(raw.get("isFavorite")),
+        }
+
+    async def get_event_record(self, event_id: str) -> dict[str, Any] | None:
+        """One event as an API dict, or None when the NVR no longer has it."""
+        raw = await self._api.api_request(f"events/{event_id}", raise_exception=False)
+        if not isinstance(raw, dict) or not raw.get("start"):
+            return None
+        return self._event_dict(create_from_unifi_dict(raw, api=self._api), raw)
+
+    async def set_flagged(self, event_id: str, flagged: bool) -> bool:
+        """Set or clear Protect's flag (``isFavorite``) on an event.
+
+        Events aren't writable models (``PATCH events/{id}`` is not a route);
+        the Protect web app uses ``POST favorite-events/{id}`` and
+        ``POST unfavorite-events/{id}``, which answer with an empty body (hence
+        the raw request). Flagging an already-flagged event is a 400, and
+        unflagging an unflagged one a 404.
+
+        Best-effort by design: the caller's own action must never fail because
+        the account lacks the permission or the NVR refused the write.
+        """
+        route = "favorite-events" if flagged else "unfavorite-events"
+        try:
+            await self._api.api_request_raw(f"{route}/{event_id}", method="post")
+        except Exception as err:
+            _LOGGER.warning("Could not %s event %s in Protect: %s", "flag" if flagged else "unflag", event_id, err)
+            return False
+        return True
 
     async def get_thumbnail(self, event_id: str, width: int | None = None) -> bytes | None:
         """Fetch an event thumbnail (JPEG bytes), or None if unavailable.

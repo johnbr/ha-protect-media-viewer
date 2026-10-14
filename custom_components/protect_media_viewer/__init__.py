@@ -1,7 +1,8 @@
 """The Protect Media Viewer integration.
 
 Sets up the authenticated NVR connection, the thumbnail/clip disk caches, the
-HTTP API, the websocket pre-warmer, and the bundled dashboard card.
+saved-clips store, the HTTP API, the websocket pre-warmer, and the bundled
+dashboard card.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
@@ -16,14 +18,29 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import dt as dt_util
 
 from .api import async_register_views
 from .cache import ClipCache, ThumbnailCache
 from .const import (
+    CONF_FLAG_IN_PROTECT,
+    CONF_REMOVE_ADMIN_ONLY,
+    CONF_SAVE_MIN_FREE_GB,
+    CONF_SAVE_POST_ROLL,
+    CONF_SAVE_PRE_ROLL,
+    CONF_SAVED_DIR,
+    CONF_TRASH_DAYS,
     CONF_URL_SECRET,
     CONF_VERIFY_SSL,
     DEFAULT_CLIP_CACHE_MB,
+    DEFAULT_FLAG_IN_PROTECT,
+    DEFAULT_REMOVE_ADMIN_ONLY,
+    DEFAULT_SAVE_MIN_FREE_GB,
+    DEFAULT_SAVE_POST_ROLL,
+    DEFAULT_SAVE_PRE_ROLL,
+    DEFAULT_TRASH_DAYS,
     DOMAIN,
+    SAVED_MARKER,
     VERSION,
 )
 from .frontend import async_register_frontend
@@ -35,6 +52,7 @@ from .protect import (
     ProtectConnectionError,
     async_create_session,
 )
+from .saved import SavedConfig, SavedStore
 from .websocket import async_start_prewarmer
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,8 +123,18 @@ async def async_setup_entry(
             entry, data={**entry.data, CONF_URL_SECRET: url_secret}
         )
 
+    saved = SavedStore(
+        hass,
+        client,
+        saved_config(hass, entry.options),
+        tz=dt_util.get_default_time_zone(),
+        fallback_thumbnail=thumbs.async_get,
+        meta={"nvr_id": client.nvr_id(), "integration_version": VERSION},
+    )
+    await saved.async_init()
+
     runtime = RuntimeData(
-        client=client, thumbs=thumbs, clips=clips, url_secret=url_secret
+        client=client, thumbs=thumbs, clips=clips, url_secret=url_secret, saved=saved
     )
     entry.runtime_data = runtime
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
@@ -119,17 +147,42 @@ async def async_setup_entry(
     runtime.ws_unsub = ws_unsub
     entry.async_on_unload(ws_unsub)
 
-    # Periodic LRU prune of both caches.
+    # Periodic LRU prune of both caches, and the saved clips' trash purge.
+    # (Saved clips live outside both cache dirs, so the LRU never sees them.)
     async def _prune(_now) -> None:
         await thumbs.async_prune()
         await clips.async_prune()
+        await saved.async_maintain()
 
     entry.async_on_unload(
         async_track_time_interval(hass, _prune, _PRUNE_INTERVAL)
     )
 
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     _LOGGER.debug("Connected to UniFi Protect NVR %s", client.nvr_name())
     return True
+
+
+def saved_config(hass: HomeAssistant, options: dict) -> SavedConfig:
+    """Options -> SavedConfig. An empty saved_dir means the default under /config."""
+    configured = (options.get(CONF_SAVED_DIR) or "").strip()
+    return SavedConfig(
+        root=Path(configured or hass.config.path(DOMAIN, "saved")),
+        create_marker=not configured,
+        marker=SAVED_MARKER,
+        pre_roll_s=int(options.get(CONF_SAVE_PRE_ROLL, DEFAULT_SAVE_PRE_ROLL)),
+        post_roll_s=int(options.get(CONF_SAVE_POST_ROLL, DEFAULT_SAVE_POST_ROLL)),
+        min_free_bytes=int(options.get(CONF_SAVE_MIN_FREE_GB, DEFAULT_SAVE_MIN_FREE_GB)) * 1024**3,
+        trash_days=int(options.get(CONF_TRASH_DAYS, DEFAULT_TRASH_DAYS)),
+        flag_in_protect=bool(options.get(CONF_FLAG_IN_PROTECT, DEFAULT_FLAG_IN_PROTECT)),
+        remove_admin_only=bool(options.get(CONF_REMOVE_ADMIN_ONLY, DEFAULT_REMOVE_ADMIN_ONLY)),
+    )
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ProtectMediaViewerEntry) -> None:
+    """Options changed: reload so the store picks up the new directory/settings."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(
