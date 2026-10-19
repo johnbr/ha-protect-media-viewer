@@ -29,6 +29,7 @@ from custom_components.protect_media_viewer.saved import (
     slug,
     valid_event_id,
 )
+from custom_components.protect_media_viewer.signing import SignedUrls
 
 NOW = datetime(2026, 10, 14, 12, 0, 0, tzinfo=UTC)
 JPEG = b"\xff\xd8" + b"\x00" * 2000
@@ -470,19 +471,24 @@ def test_prepare_saved_dir(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_saved_event_shape_and_media_tokens(tmp_path):
+def test_saved_event_shape_and_signed_media(tmp_path):
     root = _marked(tmp_path)
     store = run(_init(_store(root)))
     rec, _ = run(store.async_save(EV_ID, "n", "John"))
-    ev = api._saved_event(rec, "s3cret", None)
+    signed = []
+
+    def sign(path, expiration, refresh_token_id):
+        signed.append(path)
+        return f"{path}{'&' if '?' in path else '?'}authSig=x"
+
+    runtime = SimpleNamespace(media=SignedUrls(sign), saved=store)
+    ev = api._saved_event(rec, runtime, {}, None)
     assert ev["id"] == EV_ID and ev["camera_name"] == "Driveway"
     assert ev["saved"]["note"] == "n" and "_base" not in ev["saved"]
     assert "/saved-clip/" in ev["clip"] and "/saved-thumb/" in ev["thumbnail"]
-    assert ev["download"].endswith("&download=1")
-    token = ev["clip"].split("t=")[1].split("&")[0]
-    # A saved-clip token is not a live-clip token, and vice versa.
-    assert api._check_token("s3cret", "saved-clip", EV_ID, token)
-    assert not api._check_token("s3cret", "clip", EV_ID, token)
+    # download=1 is part of what was signed, not tacked on after it.
+    assert f"/api/protect_media_viewer/saved-clip/{EV_ID}?download=1" in signed
+    assert ev["download"].endswith("download=1&authSig=x")
 
 
 def test_can_remove_respects_admin_option(tmp_path):

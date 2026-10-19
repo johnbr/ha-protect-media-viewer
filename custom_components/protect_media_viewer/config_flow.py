@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -57,42 +58,46 @@ class ProtectMediaViewerConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         return ProtectMediaViewerOptionsFlow()
 
+    async def _async_connect(self, data: Mapping[str, Any]) -> tuple[dict[str, str], str | None, str | None]:
+        """Log in to the NVR described by ``data``.
+
+        Returns ``(errors, nvr_id, nvr_name)``; the id and name are ``None``
+        when the login failed.
+        """
+        session = await async_create_session(self.hass, data[CONF_VERIFY_SSL])
+        client = ProtectClient(
+            host=data[CONF_HOST],
+            port=data[CONF_PORT],
+            username=data[CONF_USERNAME],
+            password=data[CONF_PASSWORD],
+            verify_ssl=data[CONF_VERIFY_SSL],
+            session=session,
+        )
+        try:
+            await client.connect()
+        except ProtectAuthError:
+            return {"base": "invalid_auth"}, None, None
+        except ProtectConnectionError:
+            return {"base": "cannot_connect"}, None, None
+        except Exception:
+            _LOGGER.exception("Unexpected error connecting to UniFi Protect")
+            return {"base": "unknown"}, None, None
+        else:
+            return {}, client.nvr_id(), client.nvr_name()
+        finally:
+            await client.close()
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            session = await async_create_session(
-                self.hass, user_input[CONF_VERIFY_SSL]
-            )
-            client = ProtectClient(
-                host=user_input[CONF_HOST],
-                port=user_input[CONF_PORT],
-                username=user_input[CONF_USERNAME],
-                password=user_input[CONF_PASSWORD],
-                verify_ssl=user_input[CONF_VERIFY_SSL],
-                session=session,
-            )
-            try:
-                await client.connect()
-            except ProtectAuthError:
-                errors["base"] = "invalid_auth"
-            except ProtectConnectionError:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error connecting to UniFi Protect")
-                errors["base"] = "unknown"
-            else:
-                nvr_id = client.nvr_id()
-                title = client.nvr_name()
-                await client.close()
-
+            errors, nvr_id, title = await self._async_connect(user_input)
+            if not errors:
                 await self.async_set_unique_id(nvr_id)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(title=title, data=user_input)
-
-            await client.close()
 
         schema = vol.Schema(
             {
@@ -105,6 +110,46 @@ class ProtectMediaViewerConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         return self.async_show_form(
             step_id="user", data_schema=schema, errors=errors
+        )
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Setup raised ConfigEntryAuthFailed: the NVR refused the saved login."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Take a new username and password for the same NVR.
+
+        Host, port and the saved-clip options are kept, so a password change
+        no longer means deleting the integration and losing its settings.
+        """
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            errors, nvr_id, _name = await self._async_connect({**entry.data, **user_input})
+            if not errors:
+                # The login must open the NVR this entry belongs to, not
+                # another console at the same address.
+                await self.async_set_unique_id(nvr_id)
+                self._abort_if_unique_id_mismatch(reason="wrong_nvr")
+                return self.async_update_reload_and_abort(entry, data_updates=user_input)
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_USERNAME,
+                    default=(user_input or {}).get(CONF_USERNAME, entry.data[CONF_USERNAME]),
+                ): str,
+                vol.Required(CONF_PASSWORD): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"host": entry.data[CONF_HOST]},
         )
 
 

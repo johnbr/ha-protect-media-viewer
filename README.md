@@ -39,6 +39,10 @@ NVR independently and doesn't change anything about your existing setup.
    - **Verify SSL** — leave unchecked if your console uses a self-signed
      certificate.
 
+If you later change that account's password, Home Assistant asks you to sign
+in again under **Settings → Devices & Services**: enter the new login there.
+Your saved-clip settings are kept.
+
 The card (`custom:protect-media-viewer-card`) is registered automatically — no
 manual Lovelace resource is needed.
 
@@ -158,13 +162,20 @@ The integration exposes a small HTTP API the card talks to:
 | `GET /api/protect_media_viewer/saved` | Saved clips, same shape as `/events` (`camera`, `types`, `q`, `days`, `offset`, `limit`). |
 | `POST` / `PATCH` / `DELETE /api/protect_media_viewer/saved/{event_id}` | Save (`{"note": …}`), edit the note, remove. |
 | `GET /api/protect_media_viewer/saved-thumb/{event_id}`, `…/saved-clip/{event_id}` | Files of a saved clip; `?download=1` serves the MP4 as an attachment. |
+| `POST /api/protect_media_viewer/media` | Fresh signed media URLs for events the card lists (`{"ids": […], "saved": false}`). |
 
 Thumbnails and clips are cached on disk under the HA config directory
 (`protect_media_viewer/`) and pruned with an LRU size cap. Saved clips live
-in their own folder and are never touched by that pruning. The `thumb` and `clip`
-URLs are guarded by a stable per-event token derived from a secret stored in the
-config entry, so they can be loaded directly in `<img>` / `<video>` tags, are
-cacheable by the browser, and keep working across restarts.
+in their own folder and are never touched by that pruning.
+
+Every endpoint requires Home Assistant authentication. The media ones (`thumb`,
+`clip` and the saved files) are loaded by `<img>` / `<video>` tags, which can't
+send an auth header, so the lists hand them out as Home Assistant **signed
+paths**: each URL is tied to the user it was signed for and expires after 24
+hours, and a restart ends them all. A URL is reused for its first 12 hours, so
+the browser still caches thumbnails between visits. The card fetches fresh URLs
+from `/media` before the ones it holds lapse, after reconnecting to a restarted
+Home Assistant, and when a thumbnail or clip fails to load.
 
 The card itself is delivered through a small loader module that is registered
 both as a frontend module and as a Lovelace resource (you will see one

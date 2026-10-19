@@ -384,6 +384,71 @@ async function main() {
   el6.shadowRoot.querySelector(".grid").children[0].click();
   assert.ok(!el6.shadowRoot.querySelector(".modal .actions button.save"), "allow_save:false hides Save");
 
+  // --- Signed media URLs: never used once lapsed. ---
+  // A ttl of 60 s is inside the card's refresh lead, so these URLs count as
+  // stale straight away -- every path that would use one must re-sign first.
+  const mediaCalls = [];
+  let signs = 0;
+  const conn = {
+    listeners: {},
+    addEventListener(type, cb) { this.listeners[type] = cb; },
+    removeEventListener(type) { delete this.listeners[type]; },
+  };
+  const signedHass = {
+    connection: conn,
+    async callApi(method, path, body) {
+      if (path.startsWith("protect_media_viewer/cameras")) return { cameras: [] };
+      if (path.startsWith("protect_media_viewer/media")) {
+        mediaCalls.push(body);
+        signs += 1;
+        const media = {};
+        for (const id of body.ids) {
+          media[id] = {
+            thumbnail: `/api/protect_media_viewer/thumb/${id}?authSig=fresh${signs}`,
+            clip: `/api/protect_media_viewer/clip/${id}?authSig=fresh${signs}`,
+          };
+        }
+        return { media, media_ttl: 43200 };
+      }
+      const events = [makeEvent("m1", ["person"], "roof"), makeEvent("m2", ["vehicle"], "garage")];
+      return { events, count: 2, offset: 0, limit: 60, has_more: false, media_ttl: 60 };
+    },
+  };
+  const el7 = document.createElement("protect-media-viewer-card");
+  el7.setConfig({});
+  document.body.appendChild(el7);
+  el7.hass = signedHass;
+  await tick();
+  await tick();
+  const root7 = el7.shadowRoot;
+  const grid7 = root7.querySelector(".grid");
+  assert.strictEqual(grid7.children.length, 2, "signed: two tiles");
+  assert.ok(conn.listeners.ready, "signed: watches the connection for reconnects");
+
+  // Opening the player with lapsed URLs re-signs that clip first.
+  grid7.children[0].click();
+  await tick();
+  await tick();
+  assert.deepStrictEqual(mediaCalls.at(-1), { ids: ["m1"], saved: false }, "signed: player re-signs its clip");
+  assert.match(root7.querySelector(".modal video").getAttribute("src"), /\/clip\/m1\?authSig=fresh/, "signed: video gets the fresh URL");
+  root7.querySelector(".modal .close").click();
+
+  // A reconnect (a Home Assistant restart ends every signed URL) re-signs the lot,
+  // and a thumbnail not fetched yet takes its fresh URL at once.
+  conn.listeners.ready();
+  await tick();
+  await tick();
+  assert.deepStrictEqual(mediaCalls.at(-1), { ids: ["m1", "m2"], saved: false }, "signed: reconnect re-signs every event");
+  assert.match(grid7.children[1].querySelector("img").getAttribute("src"), /\/thumb\/m2\?authSig=fresh/, "signed: unloaded thumbnail swapped");
+
+  // Thumbnails failing together are re-signed in one request.
+  const before = mediaCalls.length;
+  for (const tile of grid7.children) tile.querySelector("img").dispatchEvent(new window.Event("error"));
+  await new Promise((r) => setTimeout(r, 150));
+  assert.strictEqual(mediaCalls.length, before + 1, "signed: one batched re-sign for a page of errors");
+  assert.deepStrictEqual(mediaCalls.at(-1).ids.sort(), ["m1", "m2"], "signed: the batch names every failed tile");
+  el7.remove(); // stops its refresh timer
+
   console.log("Card smoke test: SUCCESS (all assertions passed)");
 }
 

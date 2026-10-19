@@ -17,11 +17,8 @@ from types import SimpleNamespace
 from custom_components.protect_media_viewer import const
 from custom_components.protect_media_viewer.api import (
     _CLIENT_LOG_EVENTS,
-    _check_token,
     _format_client_log,
     _int_param,
-    _make_token,
-    _media_url,
     _parse_iso,
     _RateLimiter,
     _sanitize_client_text,
@@ -40,59 +37,6 @@ from custom_components.protect_media_viewer.frontend import (
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COMPONENT = _REPO_ROOT / "custom_components" / "protect_media_viewer"
-
-
-# ---------------------------------------------------------------------------
-# HMAC media tokens (api._make_token / _check_token)
-# ---------------------------------------------------------------------------
-
-
-def test_token_roundtrip_verifies():
-    token = _make_token("s3cret", "thumb", "evt-1")
-    assert _check_token("s3cret", "thumb", "evt-1", token) is True
-
-
-def test_token_is_deterministic():
-    assert _make_token("s3cret", "clip", "evt-9") == _make_token("s3cret", "clip", "evt-9")
-
-
-def test_token_rejects_wrong_kind():
-    token = _make_token("s3cret", "thumb", "evt-1")
-    assert _check_token("s3cret", "clip", "evt-1", token) is False
-
-
-def test_token_rejects_wrong_event():
-    token = _make_token("s3cret", "thumb", "evt-1")
-    assert _check_token("s3cret", "thumb", "evt-2", token) is False
-
-
-def test_token_rejects_wrong_secret():
-    token = _make_token("s3cret", "thumb", "evt-1")
-    assert _check_token("other", "thumb", "evt-1", token) is False
-
-
-def test_token_rejects_empty_or_none():
-    assert _check_token("s3cret", "thumb", "evt-1", None) is False
-    assert _check_token("s3cret", "thumb", "evt-1", "") is False
-
-
-# ---------------------------------------------------------------------------
-# Media URL construction (api._media_url)
-# ---------------------------------------------------------------------------
-
-
-def test_media_url_includes_token_and_entry():
-    url = _media_url("thumb", "evt-1", "s3cret", "entryA")
-    token = _make_token("s3cret", "thumb", "evt-1")
-    assert url.startswith("/api/protect_media_viewer/thumb/evt-1?")
-    assert f"t={token}" in url
-    assert "&entry=entryA" in url
-
-
-def test_media_url_omits_entry_when_absent():
-    url = _media_url("clip", "evt-2", "s3cret", None)
-    assert url.startswith("/api/protect_media_viewer/clip/evt-2?t=")
-    assert "entry=" not in url
 
 
 # ---------------------------------------------------------------------------

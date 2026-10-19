@@ -45,6 +45,10 @@ const RECOG_ICON = {
 
 // How many times to retry a thumbnail that fails to load before marking it broken.
 const THUMB_MAX_RETRIES = 5;
+// Ids per /media refresh request (the server's own cap).
+const MEDIA_REFRESH_MAX = 1000;
+// Refresh this long before the media URLs lapse, so none is ever used stale.
+const MEDIA_REFRESH_LEAD_MS = 60_000;
 
 class ProtectMediaViewerCard extends HTMLElement {
   constructor() {
@@ -72,6 +76,14 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._tiles = new Map(); // event id -> tile, so a save/remove can re-badge it
     this._current = null; // the event open in the player
     this._gen = 0; // bumped by _reset(); responses from an older query are dropped
+    // Media URLs are signed and expire (see api.py). When the ones held lapse;
+    // 0 until the server says, and an older server that never says is not tracked.
+    this._mediaFreshUntil = 0;
+    this._mediaTimer = null;
+    this._readyConn = null; // the hass connection whose reconnects we watch
+    this._onReady = null;
+    this._onVisible = null;
+    this._videoRetried = null; // the event whose clip was already re-signed once
   }
 
   setConfig(config) {
@@ -91,6 +103,18 @@ class ProtectMediaViewerCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     this._ensureBuilt();
+    this._watchConnection();
+  }
+
+  // A Home Assistant restart ends every signed URL. The connection reports
+  // "ready" when it comes back, so swap fresh ones in before any is used.
+  _watchConnection() {
+    const conn = this._hass && this._hass.connection;
+    if (!conn || conn === this._readyConn || typeof conn.addEventListener !== "function") return;
+    if (this._readyConn && this._onReady) this._readyConn.removeEventListener("ready", this._onReady);
+    this._onReady = () => this._refreshMedia();
+    conn.addEventListener("ready", this._onReady);
+    this._readyConn = conn;
   }
 
   connectedCallback() {
@@ -103,10 +127,16 @@ class ProtectMediaViewerCard extends HTMLElement {
     // reopened fold keeps its tiles but has lost infinite scroll.
     this._ensureBuilt();
     this._attachWatchers();
+    // A fold that was shut while the URLs lapsed needs fresh ones before any
+    // not-yet-loaded tile asks for its thumbnail.
+    if (this._mediaStale()) this._refreshMedia();
+    else this._scheduleMediaRefresh();
   }
 
   disconnectedCallback() {
     this._detachWatchers();
+    clearTimeout(this._mediaTimer);
+    this._mediaTimer = null;
   }
 
   // ---- document/window watchers -------------------------------------------
@@ -152,6 +182,12 @@ class ProtectMediaViewerCard extends HTMLElement {
       if (e.key === "Escape") this._closePlayer();
     };
     document.addEventListener("keydown", this._onKey);
+
+    // A hidden tab's timers are throttled, so the refresh may not have run.
+    this._onVisible = () => {
+      if (document.visibilityState === "visible" && this._mediaStale()) this._refreshMedia();
+    };
+    document.addEventListener("visibilitychange", this._onVisible);
   }
 
   _detachWatchers() {
@@ -164,6 +200,10 @@ class ProtectMediaViewerCard extends HTMLElement {
       window.removeEventListener("scroll", this._onScroll, true);
       window.removeEventListener("resize", this._onScroll, true);
       this._onScroll = null;
+    }
+    if (this._onVisible) {
+      document.removeEventListener("visibilitychange", this._onVisible);
+      this._onVisible = null;
     }
     if (this._onKey) {
       document.removeEventListener("keydown", this._onKey);
@@ -216,6 +256,7 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._offset = 0;
     this._hasMore = true;
     this._loadRetries = 0;
+    this._mediaFreshUntil = 0; // the new list's pages bring their own
     this._grid.innerHTML = "";
     this._setStatus("");
     this._loadMore();
@@ -259,6 +300,13 @@ class ProtectMediaViewerCard extends HTMLElement {
       if (gen !== this._gen) return; // filters changed while this page was in flight
       this._loadRetries = 0;
       if (res.saving) this._saving = res.saving;
+      // Each page's URLs are good for media_ttl from now; the list is only as
+      // fresh as its oldest page.
+      if (res.media_ttl) {
+        const until = Date.now() + res.media_ttl * 1000;
+        this._mediaFreshUntil = this._mediaFreshUntil ? Math.min(this._mediaFreshUntil, until) : until;
+        this._scheduleMediaRefresh();
+      }
       const events = res.events || [];
       this._offset += res.limit || this._pageSize();
       this._hasMore = !!res.has_more;
@@ -505,6 +553,7 @@ class ProtectMediaViewerCard extends HTMLElement {
     this._timeSel = this.shadowRoot.querySelector("select.time");
     this._modal = this.shadowRoot.querySelector(".modal");
     this._video = this.shadowRoot.querySelector(".modal video");
+    this._video.addEventListener("error", () => this._onVideoError());
     this._caption = this.shadowRoot.querySelector(".modal .caption");
     this._actions = this.shadowRoot.querySelector(".modal .actions");
     this._modesEl = this.shadowRoot.querySelector(".modes");
@@ -688,8 +737,88 @@ class ProtectMediaViewerCard extends HTMLElement {
     tile.title = [ev.saved && ev.saved.note, this._recogSummary(ev)].filter(Boolean).join(" · ");
   }
 
+  // ---- signed media URLs -------------------------------------------------
+
+  _mediaStale() {
+    return this._mediaFreshUntil > 0 && Date.now() >= this._mediaFreshUntil - MEDIA_REFRESH_LEAD_MS;
+  }
+
+  _scheduleMediaRefresh() {
+    clearTimeout(this._mediaTimer);
+    this._mediaTimer = null;
+    if (!this._mediaFreshUntil || !this.isConnected) return;
+    const delay = Math.max(1000, this._mediaFreshUntil - MEDIA_REFRESH_LEAD_MS - Date.now());
+    this._mediaTimer = setTimeout(() => this._refreshMedia(), delay);
+  }
+
+  /**
+   * Swap fresh signed URLs into the listed events — all of them, or just `ids`.
+   * Resolves true when the server answered.
+   */
+  async _refreshMedia(ids) {
+    const everything = !ids;
+    const wanted = ids || this._events.map((e) => e.id);
+    if (!this._hass || !wanted.length) return false;
+    const gen = this._gen;
+    const ep = this._entryParam();
+    const path = `protect_media_viewer/media${ep ? "?" + ep : ""}`;
+    const saved = this._isSavedMode();
+    let ttl = 0;
+    try {
+      for (let i = 0; i < wanted.length; i += MEDIA_REFRESH_MAX) {
+        const res = await this._hass.callApi("POST", path, { ids: wanted.slice(i, i + MEDIA_REFRESH_MAX), saved });
+        if (gen !== this._gen) return false; // the list was replaced meanwhile
+        const media = res.media || {};
+        for (const ev of this._events) if (media[ev.id]) this._applyMedia(ev, media[ev.id]);
+        ttl = res.media_ttl || ttl;
+      }
+    } catch (err) {
+      console.warn("protect-media-viewer: could not refresh media URLs", err);
+      return false;
+    }
+    if (everything && ttl) {
+      this._mediaFreshUntil = Date.now() + ttl * 1000;
+      this._scheduleMediaRefresh();
+    }
+    return true;
+  }
+
+  // Thumbnails tend to fail together (a page whose images the NVR is still
+  // generating), so their re-signs go out as one request.
+  _queueMediaRefresh(id) {
+    if (!this._mediaQueue) this._mediaQueue = new Set();
+    this._mediaQueue.add(id);
+    if (this._mediaQueueTimer) return;
+    this._mediaQueueTimer = setTimeout(() => {
+      const ids = [...this._mediaQueue];
+      this._mediaQueue.clear();
+      this._mediaQueueTimer = null;
+      this._refreshMedia(ids);
+    }, 100);
+  }
+
+  _applyMedia(ev, media) {
+    ev.thumbnail = media.thumbnail;
+    ev.clip = media.clip;
+    ev.download = media.download;
+    const tile = this._tiles.get(ev.id);
+    const img = tile && tile.querySelector("img");
+    // A thumbnail not fetched yet (lazy, below the fold) takes the fresh URL
+    // now; one retrying after an error picks it up on its next attempt; one
+    // that gave up gets another go.
+    if (img && (tile.classList.contains("failed") || (img.dataset.attempt === "0" && !(img.complete && img.naturalWidth)))) {
+      tile.classList.remove("failed");
+      img.dataset.attempt = "0";
+      img.src = ev.thumbnail;
+    }
+    if (this._current === ev) this._renderActions();
+  }
+
   _onThumbError(tile, img, ev) {
     const attempt = Number(img.dataset.attempt || "0") + 1;
+    // The URL itself may have lapsed (a restart ends them all): re-sign once,
+    // before the backoff below re-requests it.
+    if (attempt === 1) this._queueMediaRefresh(ev.id);
     if (attempt > THUMB_MAX_RETRIES) {
       tile.classList.add("failed"); // give up: show a broken-image marker
       tile.title = `No thumbnail: event ${ev.id} (${(ev.smart_detect_types || []).join(", ")})`;
@@ -714,7 +843,26 @@ class ProtectMediaViewerCard extends HTMLElement {
   }
 
   _openPlayer(ev) {
+    // Never hand <video> a lapsed URL: its refusal counts as a failed login.
+    if (this._mediaStale()) this._refreshMedia([ev.id]).finally(() => this._showPlayer(ev));
+    else this._showPlayer(ev);
+  }
+
+  _onVideoError() {
+    const ev = this._current;
+    if (!ev || this._videoRetried === ev || !this._video.getAttribute("src")) return;
+    this._videoRetried = ev; // once: a clip that is really missing must not loop
+    this._refreshMedia([ev.id]).then((ok) => {
+      if (!ok || this._current !== ev) return;
+      this._video.src = ev.clip;
+      const playing = this._video.play();
+      if (playing && typeof playing.catch === "function") playing.catch(() => {});
+    });
+  }
+
+  _showPlayer(ev) {
     this._current = ev;
+    this._videoRetried = null;
     const summary = this._recogSummary(ev);
     this._caption.textContent =
       `${ev.camera_name || ""} · ${(ev.smart_detect_types || []).join(", ")} · ${this._fmtDateTime(ev.start)}` +

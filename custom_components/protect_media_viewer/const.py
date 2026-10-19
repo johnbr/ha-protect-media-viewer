@@ -16,7 +16,8 @@ CONF_PORT: Final = "port"
 CONF_USERNAME: Final = "username"
 CONF_PASSWORD: Final = "password"
 CONF_VERIFY_SSL: Final = "verify_ssl"
-# Persisted secret used to sign stable media (thumbnail/clip) tokens.
+# Retired: the secret behind the old never-expiring media tokens. Kept so setup
+# can remove it from entries created before signed paths.
 CONF_URL_SECRET: Final = "url_secret"
 
 DEFAULT_PORT: Final = 443
