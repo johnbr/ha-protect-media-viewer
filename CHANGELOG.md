@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.4.0...v0.4.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* serve media on signed paths that expire, and let a changed password reauth ([#20](https://github.com/johnbr/ha-protect-media-viewer/issues/20)) ([def8f61](https://github.com/johnbr/ha-protect-media-viewer/commit/def8f6163ed1e2e7f9dc1a22eb10c7dff221abae))
+
 ## [0.4.0](https://github.com/johnbr/ha-protect-media-viewer/compare/v0.3.0...v0.4.0) (2026-10-14)
 
 
