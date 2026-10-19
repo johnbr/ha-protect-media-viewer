@@ -11,6 +11,14 @@
           "password": "Password",
           "verify_ssl": "Verify SSL certificate"
         }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to UniFi Protect again",
+        "description": "The NVR at {host} no longer accepts the saved login. Enter the username and password of a local Protect account.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -19,7 +27,9 @@
       "unknown": "Unexpected error. See the logs for details."
     },
     "abort": {
-      "already_configured": "This UniFi Protect NVR is already configured."
+      "already_configured": "This UniFi Protect NVR is already configured.",
+      "reauth_successful": "Signed in again. The integration has been reloaded.",
+      "wrong_nvr": "That login opened a different UniFi Protect NVR than the one this integration was set up for."
     }
   },
   "options": {

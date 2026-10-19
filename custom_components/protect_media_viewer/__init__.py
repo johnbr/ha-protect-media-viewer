@@ -8,10 +8,10 @@ dashboard card.
 from __future__ import annotations
 
 import logging
-import secrets
 from datetime import timedelta
 from pathlib import Path
 
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import HomeAssistant
@@ -53,6 +53,7 @@ from .protect import (
     async_create_session,
 )
 from .saved import SavedConfig, SavedStore
+from .signing import SignedUrls
 from .websocket import async_start_prewarmer
 
 _LOGGER = logging.getLogger(__name__)
@@ -114,13 +115,12 @@ async def async_setup_entry(
     )
     await clips.async_init()
 
-    # Persisted secret for signing stable media tokens (survives restarts, unlike
-    # HA's per-process signed-path secret). Generate once and store on the entry.
-    url_secret = entry.data.get(CONF_URL_SECRET)
-    if not url_secret:
-        url_secret = secrets.token_hex(32)
+    # Media URLs used to carry a never-expiring token derived from a secret
+    # kept on the entry. They are signed paths now (signing.py), so the secret
+    # is dead weight: drop it, which also kills every URL ever handed out.
+    if CONF_URL_SECRET in entry.data:
         hass.config_entries.async_update_entry(
-            entry, data={**entry.data, CONF_URL_SECRET: url_secret}
+            entry, data={k: v for k, v in entry.data.items() if k != CONF_URL_SECRET}
         )
 
     saved = SavedStore(
@@ -133,8 +133,11 @@ async def async_setup_entry(
     )
     await saved.async_init()
 
+    def _sign(path: str, expiration: timedelta, refresh_token_id: str | None) -> str:
+        return async_sign_path(hass, path, expiration, refresh_token_id=refresh_token_id)
+
     runtime = RuntimeData(
-        client=client, thumbs=thumbs, clips=clips, url_secret=url_secret, saved=saved
+        client=client, thumbs=thumbs, clips=clips, media=SignedUrls(_sign), saved=saved
     )
     entry.runtime_data = runtime
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime

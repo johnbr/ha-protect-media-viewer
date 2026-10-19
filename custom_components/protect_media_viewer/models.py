@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .cache import ClipCache, ThumbnailCache
 from .protect import ProtectClient
 from .saved import SavedStore
+from .signing import SignedUrls
 
 
 @dataclass(slots=True)
@@ -16,10 +17,8 @@ class RuntimeData:
     client: ProtectClient
     thumbs: ThumbnailCache
     clips: ClipCache
-    # Persisted secret (from the config entry) used to sign stable media tokens.
-    # Unlike HA's signed paths, this survives restarts, so thumbnail/clip URLs
-    # stay valid and browser-cacheable across restarts.
-    url_secret: str = ""
+    # Signs the thumbnail/clip URLs the lists hand out (signing.py).
+    media: SignedUrls
     ws_unsub: object | None = None
     # Clips kept beyond the NVR's retention (saved.py).
     saved: SavedStore | None = None

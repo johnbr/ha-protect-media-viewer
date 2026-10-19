@@ -28,6 +28,7 @@ MODULES = [
     "custom_components.protect_media_viewer.models",
     "custom_components.protect_media_viewer.saved",
     "custom_components.protect_media_viewer.recognition",
+    "custom_components.protect_media_viewer.signing",
 ]
 
 

@@ -51,6 +51,14 @@ if (_line := getattr(EventType, "SMART_DETECT_LINE", None)) is not None:
     _SMART_EVENT_TYPES.append(_line)
 
 
+def _non_empty(path: Path) -> bool:
+    """Whether ``path`` exists with content. Blocking: run in an executor."""
+    try:
+        return path.stat().st_size > 0
+    except FileNotFoundError:
+        return False
+
+
 class ProtectAuthError(Exception):
     """Authentication failed (bad username/password/API key)."""
 
@@ -296,7 +304,4 @@ class ProtectClient:
             channel_index=channel_index,
             output_file=dest,
         )
-        try:
-            return dest.stat().st_size > 0
-        except FileNotFoundError:
-            return False
+        return await asyncio.get_running_loop().run_in_executor(None, _non_empty, dest)

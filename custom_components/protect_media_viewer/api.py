@@ -11,20 +11,19 @@ Endpoints:
   GET /api/protect_media_viewer/saved-thumb/{id}, /saved-clip/{id}
                                            -> files from the saved directory
 
-events/cameras require normal HA auth (the card fetches them via callApi). The
-media endpoints (thumb/clip) are loaded by the browser in <img>/<video> tags,
-which can't send auth headers. Rather than HA signed paths (whose secret is
-regenerated on every restart, invalidating cached URLs), we guard them with our
-own HMAC token derived from a secret persisted in the config entry. The token is
-deterministic, so URLs are stable -> the browser caches images -> and they keep
-working across restarts.
+  POST /api/protect_media_viewer/media    -> fresh media URLs for listed events
+
+Every endpoint requires Home Assistant auth except /log. The card fetches the
+JSON ones through callApi. The media ones (thumb/clip and the saved files) are
+loaded by <img>/<video> tags, which cannot send an auth header, so the lists
+hand out Home Assistant signed paths for them: tied to the user, expiring after
+a day, and dead after a restart (see signing.py). The card swaps in fresh ones
+from /media before they lapse.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import logging
 import time
 from collections import deque
@@ -32,12 +31,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from aiohttp import web
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import KEY_HASS_REFRESH_TOKEN_ID, HomeAssistantView
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, SMART_DETECT_TYPES
 from .models import RuntimeData
 from .saved import SaveError, public_info, valid_event_id
+from .signing import MEDIA_URL_EXPIRY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +53,12 @@ _CLIENT_LOG_EVENTS = frozenset(
 _CLIENT_LOG_MAX_PER_HOUR = 30
 _CLIENT_LOG_DETAIL_MAX = 300
 
+# Ids one /media request may refresh: a long scroll, not a whole archive.
+_MEDIA_REFRESH_MAX = 1000
+# How long the card may use a URL from a list before asking /media again: every
+# URL handed out keeps at least half its lifetime (signing.py).
+_MEDIA_TTL_S = int(MEDIA_URL_EXPIRY.total_seconds() / 2)
+
 # SaveError code -> HTTP status.
 _SAVE_ERROR_STATUS = {
     "invalid_id": 400,
@@ -66,25 +72,24 @@ _SAVE_ERROR_STATUS = {
 }
 
 
-def _make_token(secret: str, kind: str, event_id: str) -> str:
-    """Deterministic, stable HMAC token guarding a media URL."""
-    return hmac.new(
-        secret.encode(), f"{kind}:{event_id}".encode(), hashlib.sha256
-    ).hexdigest()
+def _refresh_token_id(request: web.Request) -> str | None:
+    """The requesting login, so a signed URL works for that user only."""
+    return request.get(KEY_HASS_REFRESH_TOKEN_ID)
 
 
-def _check_token(secret: str, kind: str, event_id: str, token: str | None) -> bool:
-    if not token:
-        return False
-    return hmac.compare_digest(_make_token(secret, kind, event_id), token)
+def _live_media(runtime: RuntimeData, request: web.Request, event_id: str, entry_id: str | None) -> dict:
+    """Signed media URLs for an event in the live (NVR) view."""
+    has_copy = bool(runtime.saved and runtime.saved.saved_info(event_id))
+    return runtime.media.event_media(
+        event_id, entry_id, _refresh_token_id(request), saved=False, has_saved_copy=has_copy
+    )
 
 
-def _media_url(kind: str, event_id: str, secret: str, entry_id: str | None) -> str:
-    token = _make_token(secret, kind, event_id)
-    query = f"t={token}"
-    if entry_id:
-        query += f"&entry={entry_id}"
-    return f"{_API_BASE}/{kind}/{event_id}?{query}"
+def _saved_media(runtime: RuntimeData, request: web.Request, event_id: str, entry_id: str | None) -> dict:
+    """Signed media URLs for a clip in the Saved view, served from the saved dir."""
+    return runtime.media.event_media(
+        event_id, entry_id, _refresh_token_id(request), saved=True, has_saved_copy=True
+    )
 
 
 def _get_runtime(hass: HomeAssistant, entry_id: str | None) -> RuntimeData | None:
@@ -160,15 +165,11 @@ class EventsView(HomeAssistantView):
         raw_count = len(page)
         events = [e for e in page if e["camera_id"] == camera] if camera else page
 
-        secret = runtime.url_secret
         for ev in events:
-            ev["thumbnail"] = _media_url("thumb", ev["id"], secret, entry_id)
-            ev["clip"] = _media_url("clip", ev["id"], secret, entry_id)
             # The saved copy, if any: drives the tile badge and the player's
-            # Saved/Download controls.
+            # Saved/Download controls (``download`` is only set when there is one).
             ev["saved"] = runtime.saved.saved_info(ev["id"]) if runtime.saved else None
-            if ev["saved"]:
-                ev["download"] = _media_url("saved-clip", ev["id"], secret, entry_id) + "&download=1"
+            ev.update(_live_media(runtime, request, ev["id"], entry_id))
 
         return self.json(
             {
@@ -180,23 +181,22 @@ class EventsView(HomeAssistantView):
                 # card advances offset by `limit` regardless of camera filtering.
                 "has_more": raw_count == limit,
                 "saving": await _saving_status(runtime, request),
+                "media_ttl": _MEDIA_TTL_S,
             }
         )
 
 
 class ThumbnailView(HomeAssistantView):
-    """Serve a cached JPEG thumbnail for one event (guarded by a media token)."""
+    """Serve a cached JPEG thumbnail for one event (HA auth, via a signed path)."""
 
     url = f"{_API_BASE}/thumb/{{event_id}}"
     name = f"api:{DOMAIN}:thumb"
-    requires_auth = False  # guarded by our own HMAC token, not HA auth
+    requires_auth = True
 
     async def get(self, request: web.Request, event_id: str) -> web.Response:
         hass: HomeAssistant = request.app["hass"]
         runtime = _get_runtime(hass, request.query.get("entry"))
         if runtime is None:
-            return web.Response(status=404)
-        if not _check_token(runtime.url_secret, "thumb", event_id, request.query.get("t")):
             return web.Response(status=404)
 
         data = await runtime.thumbs.async_get(event_id)
@@ -232,14 +232,12 @@ class ClipView(HomeAssistantView):
 
     url = f"{_API_BASE}/clip/{{event_id}}"
     name = f"api:{DOMAIN}:clip"
-    requires_auth = False  # guarded by our own HMAC token, not HA auth
+    requires_auth = True  # loaded by <video>, so via a signed path
 
     async def get(self, request: web.Request, event_id: str) -> web.StreamResponse:
         hass: HomeAssistant = request.app["hass"]
         runtime = _get_runtime(hass, request.query.get("entry"))
         if runtime is None:
-            return web.Response(status=404)
-        if not _check_token(runtime.url_secret, "clip", event_id, request.query.get("t")):
             return web.Response(status=404)
 
         path = await runtime.clips.async_get_path(event_id)
@@ -279,13 +277,11 @@ def _user_name(request: web.Request) -> str | None:
     return getattr(user, "name", None) if user is not None else None
 
 
-def _saved_event(rec: dict, secret: str, entry_id: str | None) -> dict:
+def _saved_event(rec: dict, runtime: RuntimeData, request: web.Request, entry_id: str | None) -> dict:
     """A saved record in the /events shape, with media served from the saved dir."""
     ev = dict(rec["event"])
     ev["saved"] = public_info(rec)
-    ev["thumbnail"] = _media_url("saved-thumb", ev["id"], secret, entry_id)
-    ev["clip"] = _media_url("saved-clip", ev["id"], secret, entry_id)
-    ev["download"] = ev["clip"] + "&download=1"
+    ev.update(_saved_media(runtime, request, ev["id"], entry_id))
     return ev
 
 
@@ -330,7 +326,7 @@ class SavedListView(HomeAssistantView):
                 offset=offset,
                 limit=limit,
             )
-        events = [_saved_event(rec, runtime.url_secret, entry_id) for rec in records]
+        events = [_saved_event(rec, runtime, request, entry_id) for rec in records]
         return self.json(
             {
                 "events": events,
@@ -340,6 +336,7 @@ class SavedListView(HomeAssistantView):
                 "limit": limit,
                 "has_more": offset + len(events) < total,
                 "saving": await _saving_status(runtime, request),
+                "media_ttl": _MEDIA_TTL_S,
             }
         )
 
@@ -367,7 +364,7 @@ class SavedItemView(HomeAssistantView):
         return self.json(
             {
                 "created": created,
-                "event": _saved_event(rec, runtime.url_secret, request.query.get("entry")),
+                "event": _saved_event(rec, runtime, request, request.query.get("entry")),
             },
             status_code=201 if created else 200,
         )
@@ -381,7 +378,7 @@ class SavedItemView(HomeAssistantView):
             rec = await runtime.saved.async_update_note(event_id, body.get("note", ""))
         except SaveError as save_err:
             return _save_error(save_err)
-        return self.json({"event": _saved_event(rec, runtime.url_secret, request.query.get("entry"))})
+        return self.json({"event": _saved_event(rec, runtime, request, request.query.get("entry"))})
 
     async def delete(self, request: web.Request, event_id: str) -> web.Response:
         runtime, err = self._resolve(request, event_id)
@@ -418,9 +415,9 @@ async def _json_body(request: web.Request) -> dict:
 
 
 class _SavedMediaView(HomeAssistantView):
-    """Serve one file of a saved clip (guarded by a media token, like /clip)."""
+    """Serve one file of a saved clip (HA auth via a signed path, like /clip)."""
 
-    requires_auth = False  # guarded by our own HMAC token, not HA auth
+    requires_auth = True
     kind = ""
     ext = ""
     content_type = ""
@@ -428,8 +425,6 @@ class _SavedMediaView(HomeAssistantView):
     async def get(self, request: web.Request, event_id: str) -> web.StreamResponse:
         runtime = _get_runtime(request.app["hass"], request.query.get("entry"))
         if runtime is None or runtime.saved is None:
-            return web.Response(status=404)
-        if not _check_token(runtime.url_secret, self.kind, event_id, request.query.get("t")):
             return web.Response(status=404)
         path = runtime.saved.media_path(event_id, self.ext)
         if path is None or not await request.app["hass"].async_add_executor_job(path.is_file):
@@ -456,6 +451,38 @@ class SavedClipView(_SavedMediaView):
     kind = "saved-clip"
     ext = ".mp4"
     content_type = "video/mp4"
+
+
+class MediaUrlsView(HomeAssistantView):
+    """Fresh signed media URLs for events the card already lists.
+
+    The card calls this before the URLs it holds lapse, after reconnecting
+    (a Home Assistant restart ends every signed URL), and when a load fails --
+    so it never sends a dead URL to a media view, where the refusal would count
+    as a failed login.
+    """
+
+    url = f"{_API_BASE}/media"
+    name = f"api:{DOMAIN}:media"
+    requires_auth = True
+
+    async def post(self, request: web.Request) -> web.Response:
+        entry_id = request.query.get("entry")
+        runtime = _get_runtime(request.app["hass"], entry_id)
+        if runtime is None:
+            return self.json_message("No (or ambiguous) config; pass ?entry=", status_code=400)
+        body = await _json_body(request)
+        ids = body.get("ids")
+        if not isinstance(ids, list) or len(ids) > _MEDIA_REFRESH_MAX:
+            return self.json_message(f"ids must be a list of at most {_MEDIA_REFRESH_MAX}", status_code=400)
+        saved = body.get("saved") is True
+        build = _saved_media if saved else _live_media
+        media = {
+            event_id: build(runtime, request, event_id, entry_id)
+            for event_id in dict.fromkeys(ids)
+            if isinstance(event_id, str) and valid_event_id(event_id)
+        }
+        return self.json({"media": media, "media_ttl": _MEDIA_TTL_S})
 
 
 def _sanitize_client_text(value: object, max_len: int) -> str:
@@ -556,4 +583,5 @@ def async_register_views(hass: HomeAssistant) -> None:
     hass.http.register_view(SavedItemView())
     hass.http.register_view(SavedThumbView())
     hass.http.register_view(SavedClipView())
+    hass.http.register_view(MediaUrlsView())
     hass.http.register_view(ClientLogView())

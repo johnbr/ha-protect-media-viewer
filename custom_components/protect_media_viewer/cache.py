@@ -86,7 +86,7 @@ class ThumbnailCache:
 
     async def async_warm(self, event_id: str) -> bool:
         """Pre-fetch a thumbnail if not already cached. Returns True on store."""
-        if self.has(event_id):
+        if await self._hass.async_add_executor_job(self.has, event_id):
             return False
         return await self.async_get(event_id) is not None
 
