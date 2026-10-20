@@ -28,16 +28,23 @@ NVR independently and doesn't change anything about your existing setup.
 
 ## Installation (HACS)
 
-1. In HACS, open the **⋮** menu → **Custom repositories**, and add
-   `https://github.com/johnbr/ha-protect-media-viewer` with category
-   **Integration**.
-2. Search for **UniFi Protect Media Viewer**, download it, and restart Home Assistant.
-3. Go to **Settings → Devices & Services → Add Integration → Protect Media
+The integration is in the HACS default store.
+
+[![Open this repository in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johnbr&repository=ha-protect-media-viewer&category=integration)
+
+1. In HACS, search for **UniFi Protect Media Viewer**, download it (or use the
+   button above), and restart Home Assistant.
+2. Go to **Settings → Devices & Services → Add Integration → Protect Media
    Viewer** and enter:
    - **Host** (and port, default 443) of your Protect console.
    - A **local** Protect **username / password**.
    - **Verify SSL** — leave unchecked if your console uses a self-signed
      certificate.
+
+If your HACS doesn't list it yet (the default store can take a few hours to
+refresh), add it as a custom repository instead: HACS → **⋮** → **Custom
+repositories** → `https://github.com/johnbr/ha-protect-media-viewer`, category
+**Integration**, then continue from step 1.
 
 If you later change that account's password, Home Assistant asks you to sign
 in again under **Settings → Devices & Services**: enter the new login there.
