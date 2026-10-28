@@ -1027,7 +1027,7 @@ class ProtectMediaViewerCard extends HTMLElement {
     if (this._statusEl) this._statusEl.textContent = text;
   }
 
-  // "Johnny", "Unknown face", "Roadrunner · 1FSTSLA", "9UYB036".
+  // "Alex", "Unknown face", "Sedan · 7ABC123", "4XYZ567".
   _recogLabel(r) {
     if (r.kind === "plate") {
       if (r.name && r.plate) return `${r.name} · ${r.plate}`;

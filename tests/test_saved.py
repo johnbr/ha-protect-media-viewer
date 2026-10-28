@@ -167,7 +167,7 @@ def test_save_writes_clip_thumb_and_sidecar(tmp_path):
     client = FakeClient()
     store = run(_init(_store(root, client)))
 
-    rec, created = run(store.async_save(EV_ID, "  package\nthief ", "John"))
+    rec, created = run(store.async_save(EV_ID, "  package\nthief ", "Alex"))
 
     assert created is True
     base = f"2026/10/2026-10-11_120000_driveway_{EV_ID}"
@@ -177,7 +177,7 @@ def test_save_writes_clip_thumb_and_sidecar(tmp_path):
     sidecar = json.loads((root / f"{base}.json").read_text())
     assert sidecar["event"]["id"] == EV_ID
     assert sidecar["saved"]["note"] == "package thief"
-    assert sidecar["saved"]["saved_by"] == "John"
+    assert sidecar["saved"]["saved_by"] == "Alex"
     assert sidecar["saved"]["has_thumbnail"] is True
     assert sidecar["saved"]["protect_flagged"] is False
     assert "_base" not in sidecar
@@ -380,13 +380,13 @@ def test_remove_moves_to_trash_and_purge_honours_age(tmp_path):
     rec, _ = run(store.async_save(EV_ID))
     name = Path(rec["_base"]).name
 
-    run(store.async_remove(EV_ID, "John"))
+    run(store.async_remove(EV_ID, "Alex"))
     assert store.get(EV_ID) is None
     assert not (root / f"{rec['_base']}.mp4").exists()
     trash = root / TRASH_DIR
     assert {p.name for p in trash.iterdir()} == {f"{name}.mp4", f"{name}.jpg", f"{name}.json"}
     removed = json.loads((trash / f"{name}.json").read_text())["saved"]
-    assert removed["removed_by"] == "John"
+    assert removed["removed_by"] == "Alex"
 
     # A rescan must not resurrect it from the trash.
     run(store.async_maintain())
@@ -424,9 +424,9 @@ def _populated(tmp_path):
         _event("e3", "cam1", "Driveway", start=NOW - timedelta(days=400), types=("animal", "person")),
     ]
     store = run(_init(_store(_marked(tmp_path), FakeClient(events=events))))
-    run(store.async_save("e1", "Package thief", "John"))
-    run(store.async_save("e2", "plumber van", "Lisa"))
-    run(store.async_save("e3", "", "John"))
+    run(store.async_save("e1", "Package thief", "Alex"))
+    run(store.async_save("e2", "plumber van", "Jordan"))
+    run(store.async_save("e3", "", "Alex"))
     return store
 
 
@@ -448,7 +448,7 @@ def test_list_filters(tmp_path):
     assert ids(types=["person"]) == ["e1", "e3"]
     assert ids(types=["vehicle", "animal"]) == ["e2", "e3"]
     assert ids(query="THIEF") == ["e1"]
-    assert ids(query="lisa") == ["e2"]
+    assert ids(query="jordan") == ["e2"]
     assert ids(query="garage") == ["e2"]
     assert ids(since=NOW - timedelta(days=30)) == ["e1"]
 
@@ -474,7 +474,7 @@ def test_prepare_saved_dir(tmp_path):
 def test_saved_event_shape_and_signed_media(tmp_path):
     root = _marked(tmp_path)
     store = run(_init(_store(root)))
-    rec, _ = run(store.async_save(EV_ID, "n", "John"))
+    rec, _ = run(store.async_save(EV_ID, "n", "Alex"))
     signed = []
 
     def sign(path, expiration, refresh_token_id):
@@ -493,8 +493,8 @@ def test_saved_event_shape_and_signed_media(tmp_path):
 
 def test_can_remove_respects_admin_option(tmp_path):
     root = _marked(tmp_path)
-    admin = {"hass_user": SimpleNamespace(is_admin=True, name="John")}
-    user = {"hass_user": SimpleNamespace(is_admin=False, name="Lisa")}
+    admin = {"hass_user": SimpleNamespace(is_admin=True, name="Alex")}
+    user = {"hass_user": SimpleNamespace(is_admin=False, name="Jordan")}
 
     strict = SimpleNamespace(saved=_store(root, remove_admin_only=True))
     assert api._can_remove(strict, admin) is True

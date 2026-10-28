@@ -10,7 +10,7 @@ Protect (UFP 6+) attaches a recognition GROUP to each face or plate crop in
     group = {id, name, matched_name, confidence}
 
 * **known** -- the group has a ``name``: a face or plate someone labelled in
-  Protect ("Johnny", "Roadrunner").
+  Protect ("Alex", "Sedan").
 * **unknown** -- a real, clustered group nobody has named yet. Not the same as
   "stranger": an unlabelled household member lands here too.
 * **unidentified** -- faces only, group id ``face_degraded_<uuid>``: the crop was
