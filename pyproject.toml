@@ -42,6 +42,8 @@ line-ending = "lf"
 minversion = "8.0"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Unset, newer pytest-asyncio warns at startup, and filterwarnings "error" makes that fatal.
+asyncio_default_fixture_loop_scope = "function"
 addopts = [
     "-ra",
     "--strict-markers",
