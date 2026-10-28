@@ -17,6 +17,8 @@ It fixes the main pain points of HA's built-in Protect media browser:
   deletes the footage at the end of its retention period. Browse, search,
   download and remove saved clips from the card's **Saved** tab.
 
+![The card's Detections tab with the Animal filter on: a grid of thumbnails from several cameras, each labelled with camera, time and detection type](https://raw.githubusercontent.com/johnbr/ha-protect-media-viewer/main/docs/images/detections.png)
+
 It runs alongside the official UniFi Protect integration — it connects to your
 NVR independently and doesn't change anything about your existing setup.
 
@@ -83,15 +85,17 @@ When Protect recognises a face or reads a plate (UniFi Protect 6+ with face /
 license-plate recognition enabled), the tile shows it as a chip with Protect's
 match confidence:
 
-- **green**: a face or plate you've named in Protect, e.g. `Johnny 80%` or
-  `Roadrunner · 1FSTSLA 89%`;
+- **green**: a face or plate you've named in Protect, e.g. `Alex 80%` or
+  `Sedan · 7ABC123 89%`;
 - **amber**: recognised but not named yet, e.g. `Unknown face 95%` or a plate
-  read like `9UYB036 88%`. An unnamed face is not necessarily a stranger. Name
+  read like `4XYZ567 88%`. An unnamed face is not necessarily a stranger. Name
   the face in Protect and later matches turn green.
 
 Faces too blurry or angled to match ("face unclear") get no chip, because that
 is most face detections. They still appear, with every other match, in the
 tile's tooltip and the player caption.
+
+![The Plate filter: each tile carries a green chip for a named vehicle or an amber chip for an unnamed plate read, with Protect's confidence (plates blurred)](https://raw.githubusercontent.com/johnbr/ha-protect-media-viewer/main/docs/images/plates.png)
 
 ## Saved clips
 
@@ -125,6 +129,8 @@ in a file manager:
 
 The JSON sidecars are the only record; there is no database. They are read at
 startup and every 6 hours, so clips copied in or deleted by hand are picked up.
+
+![The Saved tab: four saved clips with bookmark and flag badges, a notes search box, and the camera and range selectors](https://raw.githubusercontent.com/johnbr/ha-protect-media-viewer/main/docs/images/saved.png)
 
 ### Options
 
