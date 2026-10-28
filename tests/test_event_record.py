@@ -20,7 +20,7 @@ SINGLE = {
 }
 LISTED = {
     **SINGLE,
-    "metadata": {"detectedThumbnails": [{"type": "vehicle", "group": {"id": "vehicle_LPR-1FSTSLA"}}]},
+    "metadata": {"detectedThumbnails": [{"type": "vehicle", "group": {"id": "vehicle_LPR-7ABC123"}}]},
 }
 
 

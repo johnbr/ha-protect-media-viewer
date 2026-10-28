@@ -251,7 +251,7 @@ async function main() {
   // --- Saved clips: badges, Save from the player, Saved mode, Remove. ---
   const calls = [];
   const savedStore = new Map(); // id -> saved event
-  const savedInfo = (note) => ({ saved_at: new Date().toISOString(), saved_by: "John", note, size: 1, protect_flagged: true });
+  const savedInfo = (note) => ({ saved_at: new Date().toISOString(), saved_by: "Alex", note, size: 1, protect_flagged: true });
   let saving = { available: true, reason: null, count: 0, can_remove: true };
   const savedHass = {
     async callApi(method, path, data) {
@@ -307,7 +307,7 @@ async function main() {
   assert.ok(post && post.path.startsWith("protect_media_viewer/saved/s1"), "POSTed the save");
   assert.strictEqual(post.data.note, "package thief", "note sent with the save");
   assert.match(grid5.children[0].querySelector(".marks").innerHTML, /mdi:bookmark/, "tile re-badged after save");
-  assert.match(actions.textContent, /Saved by John/, "player shows the saved state");
+  assert.match(actions.textContent, /Saved by Alex/, "player shows the saved state");
   assert.match(actions.textContent, /package thief/, "player shows the note");
   assert.match(actions.querySelector("a.download").getAttribute("href"), /download=1/, "download link offered");
   assert.ok(actions.querySelector("button.remove"), "admin gets Remove");
